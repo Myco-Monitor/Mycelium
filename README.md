@@ -218,6 +218,10 @@ Application settings are in `config/app_config.json`:
 - Rate limiting on API endpoints
 - All data stays local — no cloud dependency
 
+To open a device's web page directly in your browser without a certificate
+warning, install the Myco-Monitor CA root into your trust store — see
+[Trusting Your Device Certificates](docs/trusting-device-certificates.md).
+
 ---
 
 ## Contributing
