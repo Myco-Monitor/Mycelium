@@ -247,12 +247,12 @@ MIT License. See [LICENSE](LICENSE) for details.
 
 ## About Myco-Monitor
 
-Myco-Monitor is a modular monitoring and control system for small to mid-sized mushroom farms, developed by Bull City Fungi. Components include:
+Myco-Monitor is a modular monitoring and control system for small to mid-sized mushroom farms. Components include:
 
 - **Spore**: ESP32-S3 environmental sensor node (CO2, temperature, humidity)
 - **Hyphae**: ESP32-S3 controller (6-relay control, pressure sensing, speaker alerts)
 - **Mycelium**: Python data aggregation, control, and analysis platform (open source)
 
-Hardware and support available at [Bull City Fungi](https://bullcityfungi.com).
+Hardware and support available at [Myco-Monitor](https://myco-monitor.com).
 
 *Precise Control, Maximum Yields*
