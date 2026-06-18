@@ -1,0 +1,65 @@
+{
+  "app": {
+    "name": "Mycelium Farm Monitor",
+    "version": "2.0.0",
+    "debug": true,
+    "host": "127.0.0.1",
+    "port": 8051
+  },
+  "database": {
+    "path": "data/mycelium.db",
+    "backup_interval_hours": 24
+  },
+  "security": {
+    "session_timeout_minutes": 60
+  },
+  "tls": {
+    "ca_cert_path": "config/ca_root.pem",
+    "verify_ssl": true
+  },
+  "discovery": {
+    "mdns_enabled": true,
+    "cidr_fallback": true,
+    "scan_port": 443
+  },
+  "devices": {
+    "discovery_enabled": true,
+    "polling_interval_seconds": 30,
+    "timeout_seconds": 10
+  },
+  "polling": {
+    "spore": {
+      "interval": 60,
+      "jitter": 5,
+      "backoff_factor": 2,
+      "max_backoff": 3600,
+      "enabled": true
+    },
+    "hyphae": {
+      "interval": 60,
+      "jitter": 5,
+      "backoff_factor": 2,
+      "max_backoff": 3600,
+      "enabled": true
+    },
+    "weather": {
+      "interval": 1800,
+      "jitter": 60,
+      "backoff_factor": 2,
+      "max_backoff": 14400,
+      "enabled": true
+    },
+    "pressure": {
+      "interval": 300,
+      "jitter": 30,
+      "backoff_factor": 2,
+      "max_backoff": 3600,
+      "enabled": true
+    },
+    "alerts": {
+      "interval": 60,
+      "jitter": 5,
+      "enabled": true
+    }
+  }
+}

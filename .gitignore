@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+*.egg
+.nicegui/
+
+# Virtual environments
+mycelium/
+venv/
+.venv/
+env/
+
+# Database and user data
+data/
+*.db
+
+# Sensitive files
+.pin_key
+*.pem.key
+.env
+.env.*
+!.env.example
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Exports and temp files
+*.xlsx
+*.csv.tmp
+curr_error.log
+
+# Legacy / internal
+_OLD_DOCS/
+plans/
+REFACTOR_PLAN.md

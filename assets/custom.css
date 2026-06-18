@@ -1,0 +1,55 @@
+/* Custom CSS for Mycelium */
+
+/* Move Dash dev tools button to the left side to avoid covering the light/dark toggle */
+/* Target multiple possible class names for different Dash versions */
+
+._dash-debug-menu {
+    left: 20px !important;
+    right: auto !important;
+}
+
+._dash-debug-menu__outer {
+    left: 20px !important;
+    right: auto !important;
+}
+
+/* Alternative class names used in some Dash versions */
+.dash-debug-menu {
+    left: 20px !important;
+    right: auto !important;
+}
+
+.dash-debug-menu__outer {
+    left: 20px !important;
+    right: auto !important;
+}
+
+/* Target by position - any fixed element at bottom right */
+div[class*="debug-menu"] {
+    left: 20px !important;
+    right: auto !important;
+}
+
+/* Target the debug alert container */
+._dash-debug-alert-container {
+    left: 20px !important;
+    right: auto !important;
+}
+
+.dash-debug-alert-container {
+    left: 20px !important;
+    right: auto !important;
+}
+
+/* Dash error UI positioning */
+._dash-error-menu {
+    left: 20px !important;
+    right: auto !important;
+}
+
+/* Target any element with dash-debug in the class */
+[class*="_dash-debug"],
+[class*="dash-debug"] {
+    left: 20px !important;
+    right: auto !important;
+}
