@@ -13,7 +13,9 @@ def create_calibration_event(device_id, cal_type, target_ppm, status, notes=None
     INSERT INTO calibration_history (device_id, cal_type, target_ppm, status, started_at, notes)
     VALUES (?, ?, ?, ?, ?, ?)
     """
-    return execute_insert(query, (device_id, cal_type, target_ppm, status, get_timestamp(), notes))
+    return execute_insert(
+        query, (device_id, cal_type, target_ppm, status, get_timestamp(), notes)
+    )
 
 
 def get_calibration_history(device_id=None, limit=50):

@@ -4,7 +4,6 @@ CRUD operations for alert_rules table.
 Manages alert rule configurations for device monitoring.
 """
 
-from datetime import datetime
 from typing import Optional, Dict, Any, List
 
 from storage.db_utils import get_connection
@@ -19,8 +18,8 @@ def create_rule(
     metric: Optional[str] = None,
     threshold_value: Optional[float] = None,
     threshold_duration_minutes: int = 5,
-    notification_method: str = 'ui',
-    notification_target: Optional[str] = None
+    notification_method: str = "ui",
+    notification_target: Optional[str] = None,
 ) -> int:
     """
     Create a new alert rule.
@@ -43,13 +42,26 @@ def create_rule(
     conn = get_connection()
     cursor = conn.cursor()
 
-    cursor.execute("""
+    cursor.execute(
+        """
         INSERT INTO alert_rules
         (rule_name, rule_type, device_type, device_id, room_id, metric,
          threshold_value, threshold_duration_minutes, notification_method, notification_target)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (rule_name, rule_type, device_type, device_id, room_id, metric,
-          threshold_value, threshold_duration_minutes, notification_method, notification_target))
+    """,
+        (
+            rule_name,
+            rule_type,
+            device_type,
+            device_id,
+            room_id,
+            metric,
+            threshold_value,
+            threshold_duration_minutes,
+            notification_method,
+            notification_target,
+        ),
+    )
 
     conn.commit()
     rule_id = cursor.lastrowid
@@ -124,11 +136,14 @@ def get_rules_by_type(rule_type: str) -> List[Dict[str, Any]]:
     conn = get_connection()
     cursor = conn.cursor()
 
-    cursor.execute("""
+    cursor.execute(
+        """
         SELECT * FROM alert_rules
         WHERE rule_type = ? AND enabled = 1
         ORDER BY rule_name
-    """, (rule_type,))
+    """,
+        (rule_type,),
+    )
 
     columns = [description[0] for description in cursor.description]
     results = [dict(zip(columns, row)) for row in cursor.fetchall()]
@@ -151,13 +166,16 @@ def get_rules_for_device(device_id: int, device_type: str) -> List[Dict[str, Any
     conn = get_connection()
     cursor = conn.cursor()
 
-    cursor.execute("""
+    cursor.execute(
+        """
         SELECT * FROM alert_rules
         WHERE enabled = 1
         AND (device_id = ? OR device_id IS NULL)
         AND (device_type = ? OR device_type IS NULL)
         ORDER BY rule_name
-    """, (device_id, device_type))
+    """,
+        (device_id, device_type),
+    )
 
     columns = [description[0] for description in cursor.description]
     results = [dict(zip(columns, row)) for row in cursor.fetchall()]
@@ -166,32 +184,62 @@ def get_rules_for_device(device_id: int, device_type: str) -> List[Dict[str, Any
     return results
 
 
+# Columns that update_rule() is permitted to write. Keys become SQL identifiers
+# (they can't be parameterized), so they are whitelisted to prevent any
+# identifier injection from caller-supplied kwargs (e.g. web form field names).
+_UPDATABLE_COLUMNS = frozenset(
+    {
+        "rule_name",
+        "rule_type",
+        "device_type",
+        "device_id",
+        "room_id",
+        "metric",
+        "threshold_value",
+        "threshold_duration_minutes",
+        "notification_method",
+        "notification_target",
+        "enabled",
+    }
+)
+
+
 def update_rule(rule_id: int, **kwargs) -> bool:
     """
     Update a rule with given fields.
 
     Args:
         rule_id: Rule ID to update
-        **kwargs: Fields to update
+        **kwargs: Fields to update (must be names in _UPDATABLE_COLUMNS)
 
     Returns:
         True if updated
+
+    Raises:
+        ValueError: if an unknown column name is supplied
     """
     if not kwargs:
         return False
 
-    # Build SET clause
-    fields = ', '.join(f"{k} = ?" for k in kwargs.keys())
+    invalid = set(kwargs) - _UPDATABLE_COLUMNS
+    if invalid:
+        raise ValueError(f"Unknown alert_rules column(s): {', '.join(sorted(invalid))}")
+
+    # Build SET clause. Column names are whitelisted above; values are parameterized.
+    fields = ", ".join(f"{k} = ?" for k in kwargs)
     values = list(kwargs.values()) + [rule_id]
 
     conn = get_connection()
     cursor = conn.cursor()
 
-    cursor.execute(f"""
+    cursor.execute(
+        f"""
         UPDATE alert_rules
         SET {fields}, updated_at = CURRENT_TIMESTAMP
         WHERE rule_id = ?
-    """, values)
+    """,
+        values,
+    )
 
     conn.commit()
     updated = cursor.rowcount > 0

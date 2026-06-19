@@ -16,6 +16,7 @@ from api.clients.base_client import create_device_ssl_context
 @dataclass
 class AuthResult:
     """Result of an authentication attempt."""
+
     success: bool
     challenge: Optional[str] = None
     response: Optional[str] = None
@@ -62,11 +63,15 @@ class DeviceAuthHandler:
             timeout = aiohttp.ClientTimeout(total=self.timeout)
             ssl_ctx = create_device_ssl_context()
             connector = aiohttp.TCPConnector(ssl=ssl_ctx)
-            async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
-                async with session.get(f"https://{self.device_ip}/auth-challenge") as response:
+            async with aiohttp.ClientSession(
+                timeout=timeout, connector=connector
+            ) as session:
+                async with session.get(
+                    f"https://{self.device_ip}/auth-challenge"
+                ) as response:
                     if response.status == 200:
                         data = await response.json()
-                        self._cached_challenge = data.get('challenge')
+                        self._cached_challenge = data.get("challenge")
                         return self._cached_challenge
         except aiohttp.ClientError:
             pass
@@ -102,10 +107,7 @@ class DeviceAuthHandler:
             raise AuthenticationError("Failed to get auth challenge from device")
 
         response = self.compute_response(challenge)
-        return {
-            "X-Auth-Challenge": challenge,
-            "X-Auth-Response": response
-        }
+        return {"X-Auth-Challenge": challenge, "X-Auth-Response": response}
 
     async def authenticate(self) -> AuthResult:
         """
@@ -117,23 +119,18 @@ class DeviceAuthHandler:
         challenge = await self.get_challenge()
         if not challenge:
             return AuthResult(
-                success=False,
-                error="Failed to get challenge from device"
+                success=False, error="Failed to get challenge from device"
             )
 
         response = self.compute_response(challenge)
-        return AuthResult(
-            success=True,
-            challenge=challenge,
-            response=response
-        )
+        return AuthResult(success=True, challenge=challenge, response=response)
 
     async def make_authenticated_request(
         self,
         method: str,
         endpoint: str,
         json_data: Optional[Dict] = None,
-        data: Optional[str] = None
+        data: Optional[str] = None,
     ) -> Dict:
         """
         Make an authenticated request to the device.
@@ -158,7 +155,9 @@ class DeviceAuthHandler:
         try:
             ssl_ctx = create_device_ssl_context()
             connector = aiohttp.TCPConnector(ssl=ssl_ctx)
-            async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
+            async with aiohttp.ClientSession(
+                timeout=timeout, connector=connector
+            ) as session:
                 kwargs = {"headers": headers}
                 if json_data is not None:
                     kwargs["json"] = json_data
@@ -176,26 +175,26 @@ class DeviceAuthHandler:
                         return {
                             "success": True,
                             "status": status,
-                            "data": response_data
+                            "data": response_data,
                         }
                     elif status == 401:
                         return {
                             "success": False,
                             "status": status,
-                            "error": "Authentication failed - incorrect PIN"
+                            "error": "Authentication failed - incorrect PIN",
                         }
                     elif status == 403:
                         return {
                             "success": False,
                             "status": status,
-                            "error": "Operation not permitted"
+                            "error": "Operation not permitted",
                         }
                     else:
                         return {
                             "success": False,
                             "status": status,
                             "error": f"Request failed with status {status}",
-                            "data": response_data
+                            "data": response_data,
                         }
 
         except aiohttp.ClientError as e:
@@ -206,4 +205,5 @@ class DeviceAuthHandler:
 
 class AuthenticationError(Exception):
     """Raised when authentication fails."""
+
     pass

@@ -15,7 +15,7 @@ def create_alert(
     alert_message: str,
     device_id: Optional[int] = None,
     device_type: Optional[str] = None,
-    alert_value: Optional[float] = None
+    alert_value: Optional[float] = None,
 ) -> int:
     """
     Create a new alert record.
@@ -33,11 +33,14 @@ def create_alert(
     conn = get_connection()
     cursor = conn.cursor()
 
-    cursor.execute("""
+    cursor.execute(
+        """
         INSERT INTO alert_history
         (rule_id, device_id, device_type, alert_message, alert_value)
         VALUES (?, ?, ?, ?, ?)
-    """, (rule_id, device_id, device_type, alert_message, alert_value))
+    """,
+        (rule_id, device_id, device_type, alert_message, alert_value),
+    )
 
     conn.commit()
     alert_id = cursor.lastrowid
@@ -59,12 +62,15 @@ def get_alert(alert_id: int) -> Optional[Dict[str, Any]]:
     conn = get_connection()
     cursor = conn.cursor()
 
-    cursor.execute("""
+    cursor.execute(
+        """
         SELECT ah.*, ar.rule_name, ar.rule_type
         FROM alert_history ah
         JOIN alert_rules ar ON ah.rule_id = ar.rule_id
         WHERE ah.alert_id = ?
-    """, (alert_id,))
+    """,
+        (alert_id,),
+    )
 
     row = cursor.fetchone()
     if row:
@@ -143,14 +149,17 @@ def get_alert_history(days: int = 7, limit: int = 100) -> List[Dict[str, Any]]:
     conn = get_connection()
     cursor = conn.cursor()
 
-    cursor.execute("""
+    cursor.execute(
+        """
         SELECT ah.*, ar.rule_name, ar.rule_type
         FROM alert_history ah
         JOIN alert_rules ar ON ah.rule_id = ar.rule_id
         WHERE ah.triggered_at >= ?
         ORDER BY ah.triggered_at DESC
         LIMIT ?
-    """, (cutoff, limit))
+    """,
+        (cutoff, limit),
+    )
 
     columns = [description[0] for description in cursor.description]
     results = [dict(zip(columns, row)) for row in cursor.fetchall()]
@@ -160,9 +169,7 @@ def get_alert_history(days: int = 7, limit: int = 100) -> List[Dict[str, Any]]:
 
 
 def get_alerts_for_device(
-    device_id: int,
-    device_type: str,
-    days: int = 7
+    device_id: int, device_type: str, days: int = 7
 ) -> List[Dict[str, Any]]:
     """
     Get alerts for a specific device.
@@ -180,14 +187,17 @@ def get_alerts_for_device(
     conn = get_connection()
     cursor = conn.cursor()
 
-    cursor.execute("""
+    cursor.execute(
+        """
         SELECT ah.*, ar.rule_name, ar.rule_type
         FROM alert_history ah
         JOIN alert_rules ar ON ah.rule_id = ar.rule_id
         WHERE ah.device_id = ? AND ah.device_type = ?
         AND ah.triggered_at >= ?
         ORDER BY ah.triggered_at DESC
-    """, (device_id, device_type, cutoff))
+    """,
+        (device_id, device_type, cutoff),
+    )
 
     columns = [description[0] for description in cursor.description]
     results = [dict(zip(columns, row)) for row in cursor.fetchall()]
@@ -209,11 +219,14 @@ def resolve_alert(alert_id: int) -> bool:
     conn = get_connection()
     cursor = conn.cursor()
 
-    cursor.execute("""
+    cursor.execute(
+        """
         UPDATE alert_history
         SET resolved_at = CURRENT_TIMESTAMP
         WHERE alert_id = ?
-    """, (alert_id,))
+    """,
+        (alert_id,),
+    )
 
     conn.commit()
     updated = cursor.rowcount > 0
@@ -222,11 +235,7 @@ def resolve_alert(alert_id: int) -> bool:
     return updated
 
 
-def acknowledge_alert(
-    alert_id: int,
-    user_id: int,
-    notes: Optional[str] = None
-) -> bool:
+def acknowledge_alert(alert_id: int, user_id: int, notes: Optional[str] = None) -> bool:
     """
     Acknowledge an alert.
 
@@ -241,14 +250,17 @@ def acknowledge_alert(
     conn = get_connection()
     cursor = conn.cursor()
 
-    cursor.execute("""
+    cursor.execute(
+        """
         UPDATE alert_history
         SET acknowledged = 1,
             acknowledged_by = ?,
             acknowledged_at = CURRENT_TIMESTAMP,
             notes = ?
         WHERE alert_id = ?
-    """, (user_id, notes, alert_id))
+    """,
+        (user_id, notes, alert_id),
+    )
 
     conn.commit()
     updated = cursor.rowcount > 0
@@ -258,9 +270,7 @@ def acknowledge_alert(
 
 
 def check_duplicate_alert(
-    rule_id: int,
-    device_id: Optional[int],
-    minutes: int = 60
+    rule_id: int, device_id: Optional[int], minutes: int = 60
 ) -> bool:
     """
     Check if a similar alert was triggered recently.
@@ -279,21 +289,27 @@ def check_duplicate_alert(
     cursor = conn.cursor()
 
     if device_id is not None:
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT COUNT(*) FROM alert_history
             WHERE rule_id = ?
             AND device_id = ?
             AND triggered_at >= ?
             AND resolved_at IS NULL
-        """, (rule_id, device_id, cutoff))
+        """,
+            (rule_id, device_id, cutoff),
+        )
     else:
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT COUNT(*) FROM alert_history
             WHERE rule_id = ?
             AND device_id IS NULL
             AND triggered_at >= ?
             AND resolved_at IS NULL
-        """, (rule_id, cutoff))
+        """,
+            (rule_id, cutoff),
+        )
 
     count = cursor.fetchone()[0]
     conn.close()
@@ -315,13 +331,16 @@ def auto_resolve_for_rule_device(rule_id: int, device_id: int) -> int:
     conn = get_connection()
     cursor = conn.cursor()
 
-    cursor.execute("""
+    cursor.execute(
+        """
         UPDATE alert_history
         SET resolved_at = CURRENT_TIMESTAMP
         WHERE rule_id = ?
         AND device_id = ?
         AND resolved_at IS NULL
-    """, (rule_id, device_id))
+    """,
+        (rule_id, device_id),
+    )
 
     conn.commit()
     resolved_count = cursor.rowcount
@@ -353,9 +372,9 @@ def get_alert_counts() -> Dict[str, int]:
     conn.close()
 
     return {
-        'total_24h': row[0] or 0,
-        'active': row[1] or 0,
-        'unacknowledged': row[2] or 0
+        "total_24h": row[0] or 0,
+        "active": row[1] or 0,
+        "unacknowledged": row[2] or 0,
     }
 
 
@@ -374,11 +393,14 @@ def cleanup_old_alerts(days: int = 30) -> int:
     conn = get_connection()
     cursor = conn.cursor()
 
-    cursor.execute("""
+    cursor.execute(
+        """
         DELETE FROM alert_history
         WHERE resolved_at IS NOT NULL
         AND resolved_at < ?
-    """, (cutoff,))
+    """,
+        (cutoff,),
+    )
 
     conn.commit()
     deleted_count = cursor.rowcount

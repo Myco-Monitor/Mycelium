@@ -33,34 +33,34 @@ def pressure_card(colors: dict):
         readings = _get_pressure_readings(devices)
 
         if not readings:
-            ui.label('No pressure data yet. Waiting for Hyphae devices to report.').classes(
-                'text-caption text-muted'
-            )
+            ui.label(
+                "No pressure data yet. Waiting for Hyphae devices to report."
+            ).classes("text-caption text-muted")
             return
 
         for r in readings:
-            with ui.row().classes('w-full items-center justify-between gap-2'):
-                with ui.row().classes('items-center gap-2'):
-                    ui.icon('speed', size='xs').style(f'color: {colors["primary"]}')
-                    ui.label(r['device_name']).classes('text-weight-bold')
+            with ui.row().classes("w-full items-center justify-between gap-2"):
+                with ui.row().classes("items-center gap-2"):
+                    ui.icon("speed", size="xs").style(f"color: {colors['primary']}")
+                    ui.label(r["device_name"]).classes("text-weight-bold")
 
-                with ui.row().classes('items-center gap-4'):
-                    ui.label(f'{r["pressure_hpa"]} hPa').classes('text-h6')
-                    healthy_icon = 'check_circle' if r['healthy'] else 'error'
-                    healthy_color = '#388e3c' if r['healthy'] else '#d32f2f'
-                    ui.icon(healthy_icon, size='xs').style(f'color: {healthy_color}')
+                with ui.row().classes("items-center gap-4"):
+                    ui.label(f"{r['pressure_hpa']} hPa").classes("text-h6")
+                    healthy_icon = "check_circle" if r["healthy"] else "error"
+                    healthy_color = "#388e3c" if r["healthy"] else "#d32f2f"
+                    ui.icon(healthy_icon, size="xs").style(f"color: {healthy_color}")
 
-                ui.label(f'Source: {r["source"]}  |  {r["timestamp"]}').classes(
-                    'text-caption text-muted'
+                ui.label(f"Source: {r['source']}  |  {r['timestamp']}").classes(
+                    "text-caption text-muted"
                 )
 
             if r != readings[-1]:
-                ui.separator().classes('q-my-xs')
+                ui.separator().classes("q-my-xs")
 
-    with ui.card().classes('w-full p-4'):
-        with ui.row().classes('w-full items-center gap-2 q-mb-sm'):
-            ui.icon('thermostat', size='sm').style(f'color: {colors["primary"]}')
-            ui.label('Grow Room Pressure').classes('text-h6')
+    with ui.card().classes("w-full p-4"):
+        with ui.row().classes("w-full items-center gap-2 q-mb-sm"):
+            ui.icon("thermostat", size="sm").style(f"color: {colors['primary']}")
+            ui.label("Grow Room Pressure").classes("text-h6")
 
         pressure_content()
 
@@ -71,19 +71,23 @@ def _get_pressure_readings(devices: List[Dict[str, Any]]) -> List[Dict[str, Any]
     """Get the latest pressure reading for each Hyphae device."""
     readings = []
     for device in devices:
-        device_id = device['device_id']
+        device_id = device["device_id"]
         latest = get_latest_pressure(device_id)
         if latest:
             try:
-                ts = datetime.fromisoformat(latest['reading_ts']).strftime('%H:%M %b %d')
+                ts = datetime.fromisoformat(latest["reading_ts"]).strftime(
+                    "%H:%M %b %d"
+                )
             except (ValueError, TypeError):
-                ts = str(latest.get('reading_ts', ''))
+                ts = str(latest.get("reading_ts", ""))
 
-            readings.append({
-                'device_name': device.get('device_name', f'Hyphae #{device_id}'),
-                'pressure_hpa': latest['pressure_hpa'],
-                'source': latest.get('source', 'BMP581'),
-                'healthy': bool(latest.get('healthy', 0)),
-                'timestamp': ts,
-            })
+            readings.append(
+                {
+                    "device_name": device.get("device_name", f"Hyphae #{device_id}"),
+                    "pressure_hpa": latest["pressure_hpa"],
+                    "source": latest.get("source", "BMP581"),
+                    "healthy": bool(latest.get("healthy", 0)),
+                    "timestamp": ts,
+                }
+            )
     return readings

@@ -5,46 +5,69 @@ This module provides functions for interacting with the device_spore table
 in the Mycelium database.
 """
 
-from typing import Dict, List, Optional, Tuple, Any
-from datetime import datetime
-import sqlite3
+from typing import Dict, List, Optional, Any
 
-from storage.db_utils import execute_query, execute_insert, execute_update, get_timestamp
+from storage.db_utils import (
+    execute_query,
+    execute_insert,
+    execute_update,
+    get_timestamp,
+)
 
-def create_device_spore(room_id: int, device_name: str, ip_address: str, mac_address: str,
-                       hyphae_id: Optional[int] = None, hyphae_present: int = 0, 
-                       firmware_version: Optional[str] = None, is_online: int = 0) -> int:
+
+def create_device_spore(
+    room_id: int,
+    device_name: str,
+    hostname: str,
+    mac_address: str,
+    hyphae_id: Optional[int] = None,
+    hyphae_present: int = 0,
+    firmware_version: Optional[str] = None,
+    is_online: int = 0,
+) -> int:
     """
     Create a new device_spore record.
-    
+
     Args:
         room_id (int): ID of the grow room this device belongs to
         device_name (str): Name of the device
-        ip_address (str): IP address of the device
+        hostname (str): IP address of the device
         mac_address (str): MAC address of the device (must be unique)
         hyphae_id (int, optional): ID of the associated hyphae device
         hyphae_present (int, optional): Whether a hyphae device is present (0=no, 1=yes)
         firmware_version (str, optional): Version of the firmware running on the device
         is_online (int, optional): Whether the device is currently online (0=offline, 1=online)
-        
+
     Returns:
         int: ID of the newly created device
     """
     query = """
-    INSERT INTO device_spore (room_id, device_name, ip_address, mac_address, 
+    INSERT INTO device_spore (room_id, device_name, hostname, mac_address, 
                              hyphae_id, hyphae_present, firmware_version, is_online)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     """
-    return execute_insert(query, (room_id, device_name, ip_address, mac_address, 
-                                 hyphae_id, hyphae_present, firmware_version, is_online))
+    return execute_insert(
+        query,
+        (
+            room_id,
+            device_name,
+            hostname,
+            mac_address,
+            hyphae_id,
+            hyphae_present,
+            firmware_version,
+            is_online,
+        ),
+    )
+
 
 def get_device_spore(device_id: int) -> Optional[Dict[str, Any]]:
     """
     Get a device_spore by ID.
-    
+
     Args:
         device_id (int): ID of the device to retrieve
-        
+
     Returns:
         Optional[Dict[str, Any]]: Device data or None if not found
     """
@@ -52,13 +75,14 @@ def get_device_spore(device_id: int) -> Optional[Dict[str, Any]]:
     results = execute_query(query, (device_id,))
     return results[0] if results else None
 
+
 def get_device_spore_by_mac(mac_address: str) -> Optional[Dict[str, Any]]:
     """
     Get a device_spore by MAC address.
-    
+
     Args:
         mac_address (str): MAC address of the device to retrieve
-        
+
     Returns:
         Optional[Dict[str, Any]]: Device data or None if not found
     """
@@ -66,16 +90,20 @@ def get_device_spore_by_mac(mac_address: str) -> Optional[Dict[str, Any]]:
     results = execute_query(query, (mac_address,))
     return results[0] if results else None
 
-def get_all_device_spore(room_id: Optional[int] = None, hyphae_id: Optional[int] = None, 
-                        active_only: bool = True) -> List[Dict[str, Any]]:
+
+def get_all_device_spore(
+    room_id: Optional[int] = None,
+    hyphae_id: Optional[int] = None,
+    active_only: bool = True,
+) -> List[Dict[str, Any]]:
     """
     Get all device_spore records with room names, optionally filtering by room ID, hyphae ID, and active status.
-    
+
     Args:
         room_id (int, optional): If provided, filter devices by room ID
         hyphae_id (int, optional): If provided, filter devices by hyphae ID
         active_only (bool): If True, return only active devices
-        
+
     Returns:
         List[Dict[str, Any]]: List of device records with room names
     """
@@ -86,104 +114,154 @@ def get_all_device_spore(room_id: Optional[int] = None, hyphae_id: Optional[int]
     """
     conditions = []
     params = []
-    
+
     if room_id is not None:
         conditions.append("ds.room_id = ?")
         params.append(room_id)
-    
+
     if hyphae_id is not None:
         conditions.append("ds.hyphae_id = ?")
         params.append(hyphae_id)
-    
+
     if active_only:
         conditions.append("ds.active = 1")
-    
+
     if conditions:
         query += " WHERE " + " AND ".join(conditions)
-    
+
     query += " ORDER BY ds.device_name"
     return execute_query(query, tuple(params))
 
-def update_device_spore(device_id: int, device_name: Optional[str] = None, 
-                       ip_address: Optional[str] = None, firmware_version: Optional[str] = None,
-                       hyphae_id: Optional[int] = None, hyphae_present: Optional[int] = None) -> int:
+
+def update_device_spore(
+    device_id: int,
+    device_name: Optional[str] = None,
+    hostname: Optional[str] = None,
+    firmware_version: Optional[str] = None,
+    hyphae_id: Optional[int] = None,
+    hyphae_present: Optional[int] = None,
+) -> int:
     """
     Update a device_spore record.
-    
+
     Args:
         device_id (int): ID of the device to update
         device_name (str, optional): New name for the device
-        ip_address (str, optional): New IP address for the device
+        hostname (str, optional): New IP address for the device
         firmware_version (str, optional): New firmware version for the device
         hyphae_id (int, optional): New associated hyphae device ID
         hyphae_present (int, optional): New hyphae present status (0=no, 1=yes)
-        
+
     Returns:
         int: Number of rows affected (should be 1 if successful)
     """
     # Build the query dynamically based on which fields are provided
     update_fields = []
     params = []
-    
+
     if device_name is not None:
         update_fields.append("device_name = ?")
         params.append(device_name)
-    
-    if ip_address is not None:
-        update_fields.append("ip_address = ?")
-        params.append(ip_address)
-    
+
+    if hostname is not None:
+        update_fields.append("hostname = ?")
+        params.append(hostname)
+
     if firmware_version is not None:
         update_fields.append("firmware_version = ?")
         params.append(firmware_version)
-    
+
     if hyphae_id is not None:
         update_fields.append("hyphae_id = ?")
         params.append(hyphae_id)
         # If setting hyphae_id, also set hyphae_present to 1
         if hyphae_id > 0 and hyphae_present is None:
             update_fields.append("hyphae_present = 1")
-    
+
     if hyphae_present is not None:
         update_fields.append("hyphae_present = ?")
         params.append(hyphae_present)
         # If setting hyphae_present to 0, also set hyphae_id to NULL
         if hyphae_present == 0:
             update_fields.append("hyphae_id = NULL")
-    
+
     # Add updated_at timestamp
-    update_fields.append("created_at = ?")  # Note: device_spore uses created_at for updates
+    update_fields.append(
+        "created_at = ?"
+    )  # Note: device_spore uses created_at for updates
     params.append(get_timestamp())
-    
+
     # Add device_id to params
     params.append(device_id)
-    
+
     if not update_fields:
         return 0  # Nothing to update
-    
+
     query = f"""
     UPDATE device_spore
-    SET {', '.join(update_fields)}
+    SET {", ".join(update_fields)}
     WHERE device_id = ?
     """
-    
+
     return execute_update(query, tuple(params))
 
-def update_device_status(device_id: int, is_online: int, last_update: Optional[str] = None) -> int:
+
+def update_spore_weather_pressure(
+    device_id: int, weather_pressure_enabled: int, altitude_m: Optional[float] = None
+) -> int:
+    """
+    Update a Spore's weather-pressure relay settings.
+
+    Controls whether Mycelium pushes OpenWeatherMap-derived ambient pressure to
+    this Spore (used only when no Hyphae is linked to supply local pressure).
+
+    Args:
+        device_id (int): ID of the Spore device to update
+        weather_pressure_enabled (int): 1 to enable weather pressure relay, 0 to disable
+        altitude_m (float, optional): Device altitude in meters, used to approximate
+            local station pressure from sea-level pressure when OWM omits grnd_level.
+            Pass None to leave the stored altitude unchanged.
+
+    Returns:
+        int: Number of rows updated
+    """
+    update_fields = ["weather_pressure_enabled = ?"]
+    params: List[Any] = [1 if weather_pressure_enabled else 0]
+
+    if altitude_m is not None:
+        update_fields.append("altitude_m = ?")
+        params.append(altitude_m)
+
+    # device_spore uses created_at as its updated_at marker (see update_device_spore)
+    update_fields.append("created_at = ?")
+    params.append(get_timestamp())
+    params.append(device_id)
+
+    query = f"""
+    UPDATE device_spore
+    SET {", ".join(update_fields)}
+    WHERE device_id = ?
+    """
+    return execute_update(query, tuple(params))
+
+
+def update_device_status(
+    device_id: int, is_online: int, last_update: Optional[str] = None
+) -> int:
     """
     Update a device's online status and last update time.
-    
+
     Args:
         device_id (int): ID of the device to update
         is_online (int): New online status (0=offline, 1=online)
         last_update (str, optional): Timestamp of the last update. If None, current time is used.
-        
+
     Returns:
         int: Number of rows affected (should be 1 if successful)
     """
     if last_update is None:
         last_update = get_timestamp()
-        
+
     query = """
     UPDATE device_spore
     SET is_online = ?, last_update = ?, created_at = ?
@@ -191,14 +269,15 @@ def update_device_status(device_id: int, is_online: int, last_update: Optional[s
     """
     return execute_update(query, (is_online, last_update, get_timestamp(), device_id))
 
+
 def deactivate_device_spore(device_id: int, reason: Optional[str] = None) -> int:
     """
     Deactivate a device_spore.
-    
+
     Args:
         device_id (int): ID of the device to deactivate
         reason (str, optional): Reason for deactivation
-        
+
     Returns:
         int: Number of rows affected (should be 1 if successful)
     """
@@ -209,13 +288,14 @@ def deactivate_device_spore(device_id: int, reason: Optional[str] = None) -> int
     """
     return execute_update(query, (reason, get_timestamp(), device_id))
 
+
 def reactivate_device_spore(device_id: int) -> int:
     """
     Reactivate a previously deactivated device_spore.
-    
+
     Args:
         device_id (int): ID of the device to reactivate
-        
+
     Returns:
         int: Number of rows affected (should be 1 if successful)
     """
@@ -225,6 +305,7 @@ def reactivate_device_spore(device_id: int) -> int:
     WHERE device_id = ?
     """
     return execute_update(query, (get_timestamp(), device_id))
+
 
 def delete_device_spore(device_id: int) -> int:
     """
@@ -280,7 +361,9 @@ def unlink_spore_from_hyphae(spore_id: int) -> int:
     return execute_update(query, (get_timestamp(), spore_id))
 
 
-def get_spores_by_hyphae(hyphae_id: int, active_only: bool = True) -> List[Dict[str, Any]]:
+def get_spores_by_hyphae(
+    hyphae_id: int, active_only: bool = True
+) -> List[Dict[str, Any]]:
     """
     Get all Spore devices linked to a specific Hyphae controller.
 
@@ -330,18 +413,18 @@ def get_unlinked_spores(active_only: bool = True) -> List[Dict[str, Any]]:
     return execute_query(query, ())
 
 
-def get_device_spore_by_ip(ip_address: str) -> Optional[Dict[str, Any]]:
+def get_device_spore_by_hostname(hostname: str) -> Optional[Dict[str, Any]]:
     """
     Get a device_spore by IP address.
 
     Args:
-        ip_address (str): IP address of the device to retrieve
+        hostname (str): IP address of the device to retrieve
 
     Returns:
         Optional[Dict[str, Any]]: Device data or None if not found
     """
-    query = "SELECT * FROM device_spore WHERE ip_address = ?"
-    results = execute_query(query, (ip_address,))
+    query = "SELECT * FROM device_spore WHERE hostname = ?"
+    results = execute_query(query, (hostname,))
     return results[0] if results else None
 
 

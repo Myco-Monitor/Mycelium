@@ -19,41 +19,48 @@ from nicegui import ui, app
 logger = logging.getLogger(__name__)
 
 OWM_UPDATE_INTERVAL = 600  # OWM updates every 10 minutes
-OWM_API_URL = 'https://api.openweathermap.org/data/2.5/weather'
+OWM_API_URL = "https://api.openweathermap.org/data/2.5/weather"
 
 
 def _get_owm_credentials(user_id: int) -> Optional[Dict[str, str]]:
     """Load OWM API key and ZIP from user settings. Returns None if not configured."""
     try:
         from storage.tables.user_settings import get_user_setting
+
         info = get_user_setting(user_id)
         if not info:
             return None
-        api_key = info.get('owm_api_key', '').strip()
-        zip_code = info.get('owm_zip_code', '').strip()
+        api_key = info.get("owm_api_key", "").strip()
+        zip_code = info.get("owm_zip_code", "").strip()
         if api_key and zip_code:
-            return {'api_key': api_key, 'zip': zip_code}
+            return {"api_key": api_key, "zip": zip_code}
     except Exception:
         pass
     return None
 
 
-def _fetch_weather(api_key: str, zip_code: str, units: str = 'metric') -> Optional[Dict]:
+def _fetch_weather(
+    api_key: str, zip_code: str, units: str = "metric"
+) -> Optional[Dict]:
     """
     Fetch current weather from OWM. Returns the raw JSON response.
     The `dt` field is the Unix timestamp of when OWM last calculated the data.
     """
     try:
-        r = requests.get(OWM_API_URL, params={
-            'appid': api_key,
-            'zip': f'{zip_code},us',
-            'units': units,
-        }, timeout=10)
+        r = requests.get(
+            OWM_API_URL,
+            params={
+                "appid": api_key,
+                "zip": f"{zip_code},us",
+                "units": units,
+            },
+            timeout=10,
+        )
         if r.status_code == 200:
             return r.json()
-        logger.warning(f'OWM returned {r.status_code}: {r.text[:200]}')
+        logger.warning(f"OWM returned {r.status_code}: {r.text[:200]}")
     except Exception as e:
-        logger.warning(f'OWM fetch failed: {e}')
+        logger.warning(f"OWM fetch failed: {e}")
     return None
 
 
@@ -77,7 +84,7 @@ def weather_card(colors: dict):
     Only renders if the user has OWM credentials configured.
     Sets up a smart timer aligned to OWM's 10-minute update cadence.
     """
-    user_id = app.storage.user.get('user_id')
+    user_id = app.storage.user.get("user_id")
     if not user_id:
         return
 
@@ -88,87 +95,106 @@ def weather_card(colors: dict):
     # Get user's temp preference
     try:
         from storage.tables.user_settings import get_user_setting
-        info = get_user_setting(user_id)
-        temp_pref = info.get('temp_pref', 'C') if info else 'C'
-    except Exception:
-        temp_pref = 'C'
 
-    units = 'metric' if temp_pref == 'C' else 'imperial'
-    temp_unit = '\u00b0C' if temp_pref == 'C' else '\u00b0F'
-    speed_unit = 'm/s' if temp_pref == 'C' else 'mph'
+        info = get_user_setting(user_id)
+        temp_pref = info.get("temp_pref", "C") if info else "C"
+    except Exception:
+        temp_pref = "C"
+
+    units = "metric" if temp_pref == "C" else "imperial"
+    temp_unit = "\u00b0C" if temp_pref == "C" else "\u00b0F"
+    speed_unit = "m/s" if temp_pref == "C" else "mph"
 
     # Timer state — stored in a mutable dict so the timer callback can update it
-    timer_state = {'next_poll': 0}
+    timer_state = {"next_poll": 0}
 
     @ui.refreshable
     def weather_content():
-        data = _fetch_weather(creds['api_key'], creds['zip'], units)
+        data = _fetch_weather(creds["api_key"], creds["zip"], units)
         if not data:
-            ui.label('Unable to fetch weather data. Check your API key and ZIP code in Settings.').classes('text-muted')
+            ui.label(
+                "Unable to fetch weather data. Check your API key and ZIP code in Settings."
+            ).classes("text-muted")
             # Retry in 60 seconds
-            timer_state['next_poll'] = 60
+            timer_state["next_poll"] = 60
             return
 
         # Parse response
-        main = data.get('main', {})
-        weather = data.get('weather', [{}])[0]
-        wind = data.get('wind', {})
-        sys_data = data.get('sys', {})
-        dt_unix = data.get('dt', 0)
-        city = data.get('name', 'Unknown')
+        main = data.get("main", {})
+        weather = data.get("weather", [{}])[0]
+        wind = data.get("wind", {})
+        sys_data = data.get("sys", {})
+        dt_unix = data.get("dt", 0)
+        city = data.get("name", "Unknown")
 
-        temp = main.get('temp', 0)
-        feels_like = main.get('feels_like', 0)
-        humidity = main.get('humidity', 0)
-        pressure = main.get('pressure', 0)
-        wind_speed = wind.get('speed', 0)
-        wind_deg = wind.get('deg', 0)
-        description = weather.get('description', '').capitalize()
-        icon_code = weather.get('icon', '01d')
+        temp = main.get("temp", 0)
+        feels_like = main.get("feels_like", 0)
+        humidity = main.get("humidity", 0)
+        pressure = main.get("pressure", 0)
+        wind_speed = wind.get("speed", 0)
+        wind_deg = wind.get("deg", 0)
+        description = weather.get("description", "").capitalize()
+        icon_code = weather.get("icon", "01d")
 
         # Sunrise/sunset
-        sunrise = datetime.fromtimestamp(sys_data.get('sunrise', 0)).strftime('%H:%M') if sys_data.get('sunrise') else '—'
-        sunset = datetime.fromtimestamp(sys_data.get('sunset', 0)).strftime('%H:%M') if sys_data.get('sunset') else '—'
+        sunrise = (
+            datetime.fromtimestamp(sys_data.get("sunrise", 0)).strftime("%H:%M")
+            if sys_data.get("sunrise")
+            else "—"
+        )
+        sunset = (
+            datetime.fromtimestamp(sys_data.get("sunset", 0)).strftime("%H:%M")
+            if sys_data.get("sunset")
+            else "—"
+        )
 
         # Data timestamp
-        data_time = datetime.fromtimestamp(dt_unix).strftime('%H:%M') if dt_unix else '—'
+        data_time = (
+            datetime.fromtimestamp(dt_unix).strftime("%H:%M") if dt_unix else "—"
+        )
 
         # Calculate next poll interval
         if dt_unix:
-            timer_state['next_poll'] = _seconds_until_next_update(dt_unix)
+            timer_state["next_poll"] = _seconds_until_next_update(dt_unix)
         else:
-            timer_state['next_poll'] = OWM_UPDATE_INTERVAL
+            timer_state["next_poll"] = OWM_UPDATE_INTERVAL
 
         # Wind direction arrow
-        directions = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW']
+        directions = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
         wind_dir = directions[round(wind_deg / 45) % 8]
 
         # Render — centered top section
-        with ui.row().classes('w-full items-center justify-center gap-4'):
-            ui.image(f'https://openweathermap.org/img/wn/{icon_code}@2x.png').classes('w-16 h-16')
+        with ui.row().classes("w-full items-center justify-center gap-4"):
+            ui.image(f"https://openweathermap.org/img/wn/{icon_code}@2x.png").classes(
+                "w-16 h-16"
+            )
 
-            with ui.column().classes('gap-0 items-center'):
-                ui.label(city).classes('text-subtitle1 text-weight-bold')
-                ui.label(f'{temp:.0f}{temp_unit}').classes('text-h4')
-                ui.label(f'Feels like {feels_like:.0f}{temp_unit}').classes('text-caption text-muted')
-                ui.label(description).classes('text-caption')
-                ui.label(f'Data as of {data_time} \u2022 Updates every 10 min').classes('text-caption text-muted')
+            with ui.column().classes("gap-0 items-center"):
+                ui.label(city).classes("text-subtitle1 text-weight-bold")
+                ui.label(f"{temp:.0f}{temp_unit}").classes("text-h4")
+                ui.label(f"Feels like {feels_like:.0f}{temp_unit}").classes(
+                    "text-caption text-muted"
+                )
+                ui.label(description).classes("text-caption")
+                ui.label(f"Data as of {data_time} \u2022 Updates every 10 min").classes(
+                    "text-caption text-muted"
+                )
 
-        ui.separator().classes('q-my-sm')
+        ui.separator().classes("q-my-sm")
 
         # Detail stats — horizontal row
-        with ui.row().classes('w-full justify-around flex-wrap gap-2'):
-            _weather_stat('water_drop', 'Humidity', f'{humidity}%')
-            _weather_stat('speed', 'Pressure', f'{pressure} hPa')
-            _weather_stat('air', 'Wind', f'{wind_speed} {speed_unit} {wind_dir}')
-            _weather_stat('wb_sunny', 'Sunrise', sunrise)
-            _weather_stat('nights_stay', 'Sunset', sunset)
+        with ui.row().classes("w-full justify-around flex-wrap gap-2"):
+            _weather_stat("water_drop", "Humidity", f"{humidity}%")
+            _weather_stat("speed", "Pressure", f"{pressure} hPa")
+            _weather_stat("air", "Wind", f"{wind_speed} {speed_unit} {wind_dir}")
+            _weather_stat("wb_sunny", "Sunrise", sunrise)
+            _weather_stat("nights_stay", "Sunset", sunset)
 
     # Render the card with header + refreshable content
-    with ui.card().classes('w-full p-4'):
-        with ui.row().classes('w-full items-center gap-2 q-mb-sm'):
-            ui.icon('cloud', size='sm').style(f'color: {colors["primary"]}')
-            ui.label('Local Weather').classes('text-h6')
+    with ui.card().classes("w-full p-4"):
+        with ui.row().classes("w-full items-center gap-2 q-mb-sm"):
+            ui.icon("cloud", size="sm").style(f"color: {colors['primary']}")
+            ui.label("Local Weather").classes("text-h6")
 
         weather_content()
 
@@ -182,8 +208,8 @@ def weather_card(colors: dict):
 
     def _start_aligned_timer():
         """After first fetch, align timer to OWM's update cadence."""
-        interval = timer_state.get('next_poll', OWM_UPDATE_INTERVAL)
-        logger.info(f'OWM: next poll in {interval:.0f}s')
+        interval = timer_state.get("next_poll", OWM_UPDATE_INTERVAL)
+        logger.info(f"OWM: next poll in {interval:.0f}s")
         poll_timer.interval = interval
         poll_timer.activate()
 
@@ -193,7 +219,7 @@ def weather_card(colors: dict):
 
 def _weather_stat(icon: str, label: str, value: str):
     """Render a small weather stat cell."""
-    with ui.column().classes('items-center gap-0'):
-        ui.icon(icon, size='xs').classes('text-muted')
-        ui.label(value).classes('text-weight-bold text-caption')
-        ui.label(label).classes('text-caption text-muted')
+    with ui.column().classes("items-center gap-0"):
+        ui.icon(icon, size="xs").classes("text-muted")
+        ui.label(value).classes("text-weight-bold text-caption")
+        ui.label(label).classes("text-caption text-muted")

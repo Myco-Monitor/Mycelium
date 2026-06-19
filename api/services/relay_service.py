@@ -16,6 +16,7 @@ from api.clients.base_client import create_device_ssl_context
 
 class RelayOperationMode(Enum):
     """Operating modes for the Hyphae relay system."""
+
     OFF = 0
     TESTING = 1
     RUNNING = 2
@@ -24,6 +25,7 @@ class RelayOperationMode(Enum):
 @dataclass
 class RelayState:
     """State of a single relay."""
+
     relay_number: int
     is_on: bool
     name: Optional[str] = None
@@ -33,6 +35,7 @@ class RelayState:
 @dataclass
 class RelayConfig:
     """Configuration for a single relay."""
+
     relay_number: int
     name: str
     group: int
@@ -77,8 +80,12 @@ class RelayService:
             timeout = aiohttp.ClientTimeout(total=self.timeout)
             ssl_ctx = create_device_ssl_context()
             connector = aiohttp.TCPConnector(ssl=ssl_ctx)
-            async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
-                async with session.get(f"https://{hyphae_ip}/api/relay/state") as response:
+            async with aiohttp.ClientSession(
+                timeout=timeout, connector=connector
+            ) as session:
+                async with session.get(
+                    f"https://{hyphae_ip}/api/relay/state"
+                ) as response:
                     if response.status == 200:
                         data = await response.json()
                         # Response is array of booleans: [true, false, true, false, false, false]
@@ -109,8 +116,12 @@ class RelayService:
             timeout = aiohttp.ClientTimeout(total=self.timeout)
             ssl_ctx = create_device_ssl_context()
             connector = aiohttp.TCPConnector(ssl=ssl_ctx)
-            async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
-                async with session.get(f"https://{hyphae_ip}/api/relay/config") as response:
+            async with aiohttp.ClientSession(
+                timeout=timeout, connector=connector
+            ) as session:
+                async with session.get(
+                    f"https://{hyphae_ip}/api/relay/config"
+                ) as response:
                     if response.status == 200:
                         return await response.json()
         except Exception as e:
@@ -119,11 +130,7 @@ class RelayService:
         return None
 
     async def test_relay(
-        self,
-        hyphae_ip: str,
-        pin: str,
-        relay_number: int,
-        duration_seconds: int = 5
+        self, hyphae_ip: str, pin: str, relay_number: int, duration_seconds: int = 5
     ) -> Dict[str, Any]:
         """
         Test a specific relay for a given duration.
@@ -144,29 +151,25 @@ class RelayService:
             return {"success": False, "error": "Duration must be 1-30 seconds"}
 
         auth = DeviceAuthHandler(hyphae_ip, pin, timeout=self.timeout)
-        payload = {
-            "relay": relay_number,
-            "duration": duration_seconds
-        }
+        payload = {"relay": relay_number, "duration": duration_seconds}
 
         result = await auth.make_authenticated_request(
-            "POST",
-            "/api/relay/test",
-            json_data=payload
+            "POST", "/api/relay/test", json_data=payload
         )
 
         if result.get("success"):
-            self.logger.info(f"Relay {relay_number} test started on {hyphae_ip} for {duration_seconds}s")
+            self.logger.info(
+                f"Relay {relay_number} test started on {hyphae_ip} for {duration_seconds}s"
+            )
         else:
-            self.logger.warning(f"Relay test failed on {hyphae_ip}: {result.get('error')}")
+            self.logger.warning(
+                f"Relay test failed on {hyphae_ip}: {result.get('error')}"
+            )
 
         return result
 
     async def set_operation_mode(
-        self,
-        hyphae_ip: str,
-        pin: str,
-        mode: RelayOperationMode
+        self, hyphae_ip: str, pin: str, mode: RelayOperationMode
     ) -> Dict[str, Any]:
         """
         Set the operation mode for the relay system.
@@ -183,23 +186,20 @@ class RelayService:
         payload = {"mode": mode.value}
 
         result = await auth.make_authenticated_request(
-            "POST",
-            "/api/relay/mode",
-            json_data=payload
+            "POST", "/api/relay/mode", json_data=payload
         )
 
         if result.get("success"):
             self.logger.info(f"Operation mode set to {mode.name} on {hyphae_ip}")
         else:
-            self.logger.warning(f"Failed to set operation mode on {hyphae_ip}: {result.get('error')}")
+            self.logger.warning(
+                f"Failed to set operation mode on {hyphae_ip}: {result.get('error')}"
+            )
 
         return result
 
     async def update_relay_config(
-        self,
-        hyphae_ip: str,
-        pin: str,
-        config: Dict[str, Any]
+        self, hyphae_ip: str, pin: str, config: Dict[str, Any]
     ) -> Dict[str, Any]:
         """
         Update the relay configuration.
@@ -215,15 +215,15 @@ class RelayService:
         auth = DeviceAuthHandler(hyphae_ip, pin, timeout=self.timeout)
 
         result = await auth.make_authenticated_request(
-            "POST",
-            "/api/relay/config",
-            json_data=config
+            "POST", "/api/relay/config", json_data=config
         )
 
         if result.get("success"):
             self.logger.info(f"Relay config updated on {hyphae_ip}")
         else:
-            self.logger.warning(f"Failed to update relay config on {hyphae_ip}: {result.get('error')}")
+            self.logger.warning(
+                f"Failed to update relay config on {hyphae_ip}: {result.get('error')}"
+            )
 
         return result
 
@@ -243,8 +243,12 @@ class RelayService:
             timeout = aiohttp.ClientTimeout(total=self.timeout)
             ssl_ctx = create_device_ssl_context()
             connector = aiohttp.TCPConnector(ssl=ssl_ctx)
-            async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
-                async with session.get(f"https://{hyphae_ip}/api/relay/schedule") as response:
+            async with aiohttp.ClientSession(
+                timeout=timeout, connector=connector
+            ) as session:
+                async with session.get(
+                    f"https://{hyphae_ip}/api/relay/schedule"
+                ) as response:
                     if response.status == 200:
                         return await response.json()
         except Exception as e:
@@ -253,10 +257,7 @@ class RelayService:
         return []
 
     async def update_relay_schedule(
-        self,
-        hyphae_ip: str,
-        pin: str,
-        schedule: Dict[str, Any]
+        self, hyphae_ip: str, pin: str, schedule: Dict[str, Any]
     ) -> Dict[str, Any]:
         """
         Update relay schedule rules.
@@ -272,23 +273,20 @@ class RelayService:
         auth = DeviceAuthHandler(hyphae_ip, pin, timeout=self.timeout)
 
         result = await auth.make_authenticated_request(
-            "POST",
-            "/api/relay/schedule",
-            json_data=schedule
+            "POST", "/api/relay/schedule", json_data=schedule
         )
 
         if result.get("success"):
             self.logger.info(f"Relay schedule updated on {hyphae_ip}")
         else:
-            self.logger.warning(f"Failed to update relay schedule on {hyphae_ip}: {result.get('error')}")
+            self.logger.warning(
+                f"Failed to update relay schedule on {hyphae_ip}: {result.get('error')}"
+            )
 
         return result
 
     async def set_relay_groups(
-        self,
-        hyphae_ip: str,
-        pin: str,
-        groups: List[int]
+        self, hyphae_ip: str, pin: str, groups: List[int]
     ) -> Dict[str, Any]:
         """
         Set relay group assignments.
@@ -311,15 +309,15 @@ class RelayService:
         payload = {"groups": groups}
 
         result = await auth.make_authenticated_request(
-            "POST",
-            "/api/relay/groups/set",
-            json_data=payload
+            "POST", "/api/relay/groups/set", json_data=payload
         )
 
         if result.get("success"):
             self.logger.info(f"Relay groups updated on {hyphae_ip}")
         else:
-            self.logger.warning(f"Failed to update relay groups on {hyphae_ip}: {result.get('error')}")
+            self.logger.warning(
+                f"Failed to update relay groups on {hyphae_ip}: {result.get('error')}"
+            )
 
         return result
 
@@ -339,8 +337,12 @@ class RelayService:
             timeout = aiohttp.ClientTimeout(total=self.timeout)
             ssl_ctx = create_device_ssl_context()
             connector = aiohttp.TCPConnector(ssl=ssl_ctx)
-            async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
-                async with session.get(f"https://{hyphae_ip}/api/relay/mode") as response:
+            async with aiohttp.ClientSession(
+                timeout=timeout, connector=connector
+            ) as session:
+                async with session.get(
+                    f"https://{hyphae_ip}/api/relay/mode"
+                ) as response:
                     if response.status == 200:
                         data = await response.json()
                         mode_value = data.get("mode", 0)

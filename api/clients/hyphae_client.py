@@ -6,7 +6,7 @@ Hyphae devices are environmental controllers that manage relays for equipment.
 
 Endpoints implemented:
 - GET /api/system/info - Get system information
-- GET /api/weather/current - Get weather data 
+- GET /api/weather/current - Get weather data
 - GET /api/spore/readings - Get spore device readings
 - GET /api/relay/config - Get relay configuration
 - POST /api/relay/config - Set relay configuration
@@ -20,24 +20,22 @@ Endpoints implemented:
 - GET /api/relay/cooldown - Check relay cooldown status
 """
 
-import json
-import asyncio
 import logging
-from typing import Dict, List, Any, Optional, Tuple, Union
-from datetime import datetime
+from typing import Dict, Any
 
 from api.clients.base_client import BaseApiClient, ApiError, ApiErrorType
+
 
 class HyphaeClient(BaseApiClient):
     """
     Client for interacting with Hyphae devices.
-    
+
     Attributes:
         device_name (str): Name of the device
         device_id (int): Database ID of the device
         pin (str): PIN for authenticated operations
     """
-    
+
     def __init__(
         self,
         base_url: str,
@@ -76,11 +74,11 @@ class HyphaeClient(BaseApiClient):
         self.device_id = device_id
         self.pin = pin
         self.logger = logging.getLogger(f"api.HyphaeClient.{device_name}")
-    
+
     async def check_connection(self) -> bool:
         """
         Check if the Hyphae device is reachable.
-        
+
         Returns:
             bool: True if the device is reachable, False otherwise
         """
@@ -89,14 +87,14 @@ class HyphaeClient(BaseApiClient):
             return True
         except ApiError:
             return False
-    
+
     async def get_system_info(self) -> Dict[str, Any]:
         """
         Get system information from the device.
-        
+
         Returns:
             Dict[str, Any]: System information including uptime, signal strength, etc.
-                
+
         Raises:
             ApiError: If the request fails
         """
@@ -105,7 +103,7 @@ class HyphaeClient(BaseApiClient):
         except ApiError as e:
             self.logger.error(f"Failed to get system info: {e}")
             raise
-    
+
     async def get_weather_data(self) -> Dict[str, Any]:
         """
         Get current weather data from the device.
@@ -163,10 +161,10 @@ class HyphaeClient(BaseApiClient):
     async def get_spore_readings(self) -> Dict[str, Any]:
         """
         Get spore device readings from the Hyphae device.
-        
+
         Returns:
             Dict[str, Any]: Spore device readings collected by the Hyphae device
-                
+
         Raises:
             ApiError: If the request fails
         """
@@ -175,14 +173,14 @@ class HyphaeClient(BaseApiClient):
         except ApiError as e:
             self.logger.error(f"Failed to get spore readings: {e}")
             raise
-    
+
     async def get_relay_config(self) -> Dict[str, Any]:
         """
         Get the relay configuration from the device.
-        
+
         Returns:
             Dict[str, Any]: Relay configuration
-                
+
         Raises:
             ApiError: If the request fails
         """
@@ -191,14 +189,14 @@ class HyphaeClient(BaseApiClient):
         except ApiError as e:
             self.logger.error(f"Failed to get relay configuration: {e}")
             raise
-    
+
     async def get_relay_state(self) -> Dict[str, Any]:
         """
         Get the current relay states from the device.
-        
+
         Returns:
             Dict[str, Any]: Current relay states, cooldowns, and testing status
-                
+
         Raises:
             ApiError: If the request fails
         """
@@ -207,14 +205,14 @@ class HyphaeClient(BaseApiClient):
         except ApiError as e:
             self.logger.error(f"Failed to get relay states: {e}")
             raise
-    
+
     async def get_relay_thresholds(self) -> Dict[str, Any]:
         """
         Get the dynamic control thresholds from the device.
-        
+
         Returns:
             Dict[str, Any]: Dynamic control thresholds
-                
+
         Raises:
             ApiError: If the request fails
         """
@@ -223,14 +221,14 @@ class HyphaeClient(BaseApiClient):
         except ApiError as e:
             self.logger.error(f"Failed to get relay thresholds: {e}")
             raise
-    
+
     async def get_relay_schedule(self) -> Dict[str, Any]:
         """
         Get the relay group schedule from the device.
-        
+
         Returns:
             Dict[str, Any]: Relay group schedule
-                
+
         Raises:
             ApiError: If the request fails
         """
@@ -239,26 +237,26 @@ class HyphaeClient(BaseApiClient):
         except ApiError as e:
             self.logger.error(f"Failed to get relay schedule: {e}")
             raise
-    
+
     async def set_relay_config(self, config: Dict[str, Any]) -> Dict[str, Any]:
         """
         Update the relay configuration on the device.
-        
+
         Args:
             config (Dict[str, Any]): New relay configuration
-            
+
         Returns:
             Dict[str, Any]: Response from the device
-                
+
         Raises:
             ApiError: If the request fails or the PIN is not set
         """
         if not self.pin:
             raise ApiError(
                 message="PIN is required for setting relay configuration",
-                error_type=ApiErrorType.AUTHENTICATION
+                error_type=ApiErrorType.AUTHENTICATION,
             )
-            
+
         try:
             # Add PIN to the configuration
             config_with_pin = {**config, "pin": self.pin}
@@ -266,87 +264,88 @@ class HyphaeClient(BaseApiClient):
         except ApiError as e:
             self.logger.error(f"Failed to set relay configuration: {e}")
             raise
-    
+
     async def test_relay(self, relay_number: int) -> Dict[str, Any]:
         """
         Test a relay on the device.
-        
+
         Args:
             relay_number (int): Number of the relay to test (1-6)
-            
+
         Returns:
             Dict[str, Any]: Response from the device
-                
+
         Raises:
             ApiError: If the request fails, the relay number is invalid, or the PIN is not set
         """
         if not self.pin:
             raise ApiError(
                 message="PIN is required for testing relays",
-                error_type=ApiErrorType.AUTHENTICATION
+                error_type=ApiErrorType.AUTHENTICATION,
             )
-            
+
         if not 1 <= relay_number <= 6:
             raise ApiError(
                 message=f"Relay number must be between 1 and 6, got {relay_number}",
-                error_type=ApiErrorType.VALIDATION
+                error_type=ApiErrorType.VALIDATION,
             )
-            
+
         try:
             return await self.post(
-                "/api/relay/test",
-                json_data={"relay": relay_number, "pin": self.pin}
+                "/api/relay/test", json_data={"relay": relay_number, "pin": self.pin}
             )
         except ApiError as e:
             self.logger.error(f"Failed to test relay {relay_number}: {e}")
             raise
-    
+
     async def set_relay_thresholds(self, thresholds: Dict[str, Any]) -> Dict[str, Any]:
         """
         Update the dynamic control thresholds on the device.
-        
+
         Args:
             thresholds (Dict[str, Any]): New dynamic control thresholds
-            
+
         Returns:
             Dict[str, Any]: Response from the device
-                
+
         Raises:
             ApiError: If the request fails or the PIN is not set
         """
         if not self.pin:
             raise ApiError(
                 message="PIN is required for setting relay thresholds",
-                error_type=ApiErrorType.AUTHENTICATION
+                error_type=ApiErrorType.AUTHENTICATION,
             )
-            
+
         try:
             # Add PIN to the thresholds
             thresholds_with_pin = {**thresholds, "pin": self.pin}
-            return await self.post("/api/relay/thresholds", json_data=thresholds_with_pin)
+            return await self.post(
+                "/api/relay/thresholds", json_data=thresholds_with_pin
+            )
         except ApiError as e:
             self.logger.error(f"Failed to set relay thresholds: {e}")
             raise
-    
+
     async def set_relay_schedule(self, schedule: Dict[str, Any]) -> Dict[str, Any]:
         """
         Update the relay group schedule on the device.
-        
+
         Args:
             schedule (Dict[str, Any]): New relay group schedule
-            
+
         Returns:
             Dict[str, Any]: Response from the device
-                
+
         Raises:
             ApiError: If the request fails or the PIN is not set
         """
         if not self.pin:
             raise ApiError(
                 message="PIN is required for setting relay schedule",
-                error_type=ApiErrorType.AUTHENTICATION
+                error_type=ApiErrorType.AUTHENTICATION,
             )
-            
+
         try:
             # Add PIN to the schedule
             schedule_with_pin = {**schedule, "pin": self.pin}
@@ -354,66 +353,67 @@ class HyphaeClient(BaseApiClient):
         except ApiError as e:
             self.logger.error(f"Failed to set relay schedule: {e}")
             raise
-    
+
     async def set_relay_mode(self, mode: int) -> Dict[str, Any]:
         """
         Change the relay operation mode on the device.
-        
+
         Args:
             mode (int): New operation mode (0=manual, 1=scheduled)
-            
+
         Returns:
             Dict[str, Any]: Response from the device
-                
+
         Raises:
             ApiError: If the request fails, the mode is invalid, or the PIN is not set
         """
         if not self.pin:
             raise ApiError(
                 message="PIN is required for setting relay mode",
-                error_type=ApiErrorType.AUTHENTICATION
+                error_type=ApiErrorType.AUTHENTICATION,
             )
-            
+
         if mode not in [0, 1]:
             raise ApiError(
                 message=f"Mode must be 0 (manual) or 1 (scheduled), got {mode}",
-                error_type=ApiErrorType.VALIDATION
+                error_type=ApiErrorType.VALIDATION,
             )
-            
+
         try:
             return await self.post(
-                "/api/relay/mode",
-                json_data={"mode": mode, "pin": self.pin}
+                "/api/relay/mode", json_data={"mode": mode, "pin": self.pin}
             )
         except ApiError as e:
             self.logger.error(f"Failed to set relay mode to {mode}: {e}")
             raise
-    
+
     async def get_relay_cooldown_status(self, relay_number: int) -> Dict[str, Any]:
         """
         Check the cooldown status of a specific relay.
-        
+
         Args:
             relay_number (int): Number of the relay to check (1-6)
-        
+
         Returns:
             Dict[str, Any]: Cooldown status information
-                
+
         Raises:
             ApiError: If the request fails or relay number is invalid
         """
         if not 1 <= relay_number <= 6:
             raise ApiError(
                 message=f"Relay number must be between 1 and 6, got {relay_number}",
-                error_type=ApiErrorType.VALIDATION
+                error_type=ApiErrorType.VALIDATION,
             )
-        
+
         try:
             return await self.get(f"/api/relay/cooldown?relay={relay_number}")
         except ApiError as e:
-            self.logger.error(f"Failed to get relay {relay_number} cooldown status: {e}")
+            self.logger.error(
+                f"Failed to get relay {relay_number} cooldown status: {e}"
+            )
             raise
-    
+
     async def get_info(self) -> Dict[str, Any]:
         """
         Get information about the device using system info endpoint.
@@ -467,6 +467,7 @@ class HyphaeClient(BaseApiClient):
             Dict[str, Any]: Parsed device information
         """
         import re
+
         info = {}
 
         # EXACT COPY of Spore parsing patterns
@@ -488,7 +489,7 @@ class HyphaeClient(BaseApiClient):
         # ADD Hyphae-specific parsing (NEW)
         relay_match = re.search(r"Relay States: \[([0-1,]+)\]", info_text)
         if relay_match:
-            relay_values = [int(x) for x in relay_match.group(1).split(',')]
+            relay_values = [int(x) for x in relay_match.group(1).split(",")]
             info["relay_states"] = relay_values
 
         cache_match = re.search(r"Cache Size: (\d+) entries", info_text)

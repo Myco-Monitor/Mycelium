@@ -17,17 +17,22 @@ from datetime import datetime
 import aiohttp
 
 from api.clients.base_client import create_device_ssl_context
-from storage.tables.device_spore import get_all_device_spore, update_device_status as update_spore_status
-from storage.tables.device_hyphae import get_all_device_hyphae, update_device_status as update_hyphae_status
+from storage.tables.device_spore import (
+    get_all_device_spore,
+    update_device_status as update_spore_status,
+)
+from storage.tables.device_hyphae import (
+    get_all_device_hyphae,
+    update_device_status as update_hyphae_status,
+)
 from storage.tables.device_health import (
     log_health_check,
-    get_health_history,
     get_recent_status,
     calculate_uptime,
     calculate_avg_response_time,
     get_device_health_metrics,
     cleanup_old_records,
-    get_all_devices_health_summary
+    get_all_devices_health_summary,
 )
 
 
@@ -59,8 +64,7 @@ class HealthService:
             ssl_ctx = create_device_ssl_context()
             connector = aiohttp.TCPConnector(ssl=ssl_ctx)
             self._session = aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=self.timeout),
-                connector=connector
+                timeout=aiohttp.ClientTimeout(total=self.timeout), connector=connector
             )
         return self._session
 
@@ -70,10 +74,7 @@ class HealthService:
             await self._session.close()
 
     async def check_device_health(
-        self,
-        device_id: int,
-        device_type: str,
-        ip_address: str
+        self, device_id: int, device_type: str, hostname: str
     ) -> Dict[str, Any]:
         """
         Perform a health check on a single device.
@@ -81,7 +82,7 @@ class HealthService:
         Args:
             device_id: Device ID
             device_type: 'spore' or 'hyphae'
-            ip_address: Device IP address
+            hostname: Device IP address
 
         Returns:
             Dictionary with health check results
@@ -89,17 +90,17 @@ class HealthService:
         result = {
             "device_id": device_id,
             "device_type": device_type,
-            "ip_address": ip_address,
+            "hostname": hostname,
             "is_online": False,
             "response_time_ms": None,
             "error_message": None,
             "http_status_code": None,
-            "check_time": datetime.now().isoformat()
+            "check_time": datetime.now().isoformat(),
         }
 
         # Determine the health check endpoint
         endpoint = "/api/info" if device_type == "spore" else "/api/status"
-        url = f"https://{ip_address}{endpoint}"
+        url = f"https://{hostname}{endpoint}"
 
         try:
             session = await self._get_session()
@@ -132,7 +133,7 @@ class HealthService:
                 is_online=result["is_online"],
                 response_time_ms=result["response_time_ms"],
                 error_message=result["error_message"],
-                http_status_code=result["http_status_code"]
+                http_status_code=result["http_status_code"],
             )
         except Exception as e:
             self.logger.error(f"Failed to log health check: {e}")
@@ -155,10 +156,7 @@ class HealthService:
         Returns:
             Dictionary with 'spore' and 'hyphae' lists of health check results
         """
-        results = {
-            "spore": [],
-            "hyphae": []
-        }
+        results = {"spore": [], "hyphae": []}
 
         # Get all active devices
         spore_devices = get_all_device_spore()
@@ -173,7 +171,7 @@ class HealthService:
                     self.check_device_health(
                         device_id=device["device_id"],
                         device_type="spore",
-                        ip_address=device["ip_address"]
+                        hostname=device["hostname"],
                     )
                 )
 
@@ -183,7 +181,7 @@ class HealthService:
                     self.check_device_health(
                         device_id=device["device_id"],
                         device_type="hyphae",
-                        ip_address=device["ip_address"]
+                        hostname=device["hostname"],
                     )
                 )
 
@@ -208,11 +206,7 @@ class HealthService:
 
         return results
 
-    def get_device_metrics(
-        self,
-        device_id: int,
-        device_type: str
-    ) -> Dict[str, Any]:
+    def get_device_metrics(self, device_id: int, device_type: str) -> Dict[str, Any]:
         """
         Get comprehensive health metrics for a device.
 
@@ -226,9 +220,7 @@ class HealthService:
         return get_device_health_metrics(device_id, device_type)
 
     def get_recent_device_status(
-        self,
-        device_id: int,
-        device_type: str
+        self, device_id: int, device_type: str
     ) -> Optional[Dict[str, Any]]:
         """
         Get the most recent health check for a device.
@@ -243,10 +235,7 @@ class HealthService:
         return get_recent_status(device_id, device_type)
 
     def get_device_uptime(
-        self,
-        device_id: int,
-        device_type: str,
-        hours: int = 24
+        self, device_id: int, device_type: str, hours: int = 24
     ) -> float:
         """
         Get uptime percentage for a device.
@@ -262,10 +251,7 @@ class HealthService:
         return calculate_uptime(device_id, device_type, hours)
 
     def get_device_avg_response_time(
-        self,
-        device_id: int,
-        device_type: str,
-        hours: int = 24
+        self, device_id: int, device_type: str, hours: int = 24
     ) -> Optional[float]:
         """
         Get average response time for a device.
@@ -343,15 +329,17 @@ class HealthService:
             "total_devices": total_devices,
             "total_online": total_online,
             "total_offline": total_devices - total_online,
-            "fleet_health_percent": (total_online / total_devices * 100) if total_devices > 0 else 0,
+            "fleet_health_percent": (total_online / total_devices * 100)
+            if total_devices > 0
+            else 0,
             "spore": {
                 "total": spore_online + spore_offline,
                 "online": spore_online,
-                "offline": spore_offline
+                "offline": spore_offline,
             },
             "hyphae": {
                 "total": hyphae_online + hyphae_offline,
                 "online": hyphae_online,
-                "offline": hyphae_offline
-            }
+                "offline": hyphae_offline,
+            },
         }

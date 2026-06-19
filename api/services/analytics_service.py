@@ -17,6 +17,7 @@ from storage.db_utils import execute_query
 @dataclass
 class EnvironmentalStats:
     """Statistics for environmental data over a period."""
+
     co2_mean: float
     co2_min: float
     co2_max: float
@@ -36,6 +37,7 @@ class EnvironmentalStats:
 @dataclass
 class Insight:
     """An automated insight from data analysis."""
+
     type: str  # 'success', 'warning', 'info', 'danger'
     title: str
     message: str
@@ -62,7 +64,7 @@ class AnalyticsService:
         start_date: str,
         end_date: str,
         room_id: Optional[int] = None,
-        device_id: Optional[int] = None
+        device_id: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         """
         Get environmental readings for a specified period.
@@ -106,10 +108,7 @@ class AnalyticsService:
         return execute_query(query, tuple(params))
 
     def get_daily_aggregates(
-        self,
-        start_date: str,
-        end_date: str,
-        room_id: Optional[int] = None
+        self, start_date: str, end_date: str, room_id: Optional[int] = None
     ) -> List[Dict[str, Any]]:
         """
         Get daily aggregated readings for a period.
@@ -153,10 +152,7 @@ class AnalyticsService:
         return execute_query(query, tuple(params))
 
     def get_hourly_pattern(
-        self,
-        start_date: str,
-        end_date: str,
-        room_id: Optional[int] = None
+        self, start_date: str, end_date: str, room_id: Optional[int] = None
     ) -> List[Dict[str, Any]]:
         """
         Get hourly aggregated patterns (average by hour of day).
@@ -191,8 +187,7 @@ class AnalyticsService:
         return execute_query(query, tuple(params))
 
     def calculate_environmental_stats(
-        self,
-        readings: List[Dict[str, Any]]
+        self, readings: List[Dict[str, Any]]
     ) -> Optional[EnvironmentalStats]:
         """
         Calculate statistics from a list of readings.
@@ -206,19 +201,23 @@ class AnalyticsService:
         if not readings:
             return None
 
-        co2_values = [r['co2'] for r in readings if r.get('co2') is not None]
-        temp_values = [r['temperature'] for r in readings if r.get('temperature') is not None]
-        humidity_values = [r['humidity'] for r in readings if r.get('humidity') is not None]
+        co2_values = [r["co2"] for r in readings if r.get("co2") is not None]
+        temp_values = [
+            r["temperature"] for r in readings if r.get("temperature") is not None
+        ]
+        humidity_values = [
+            r["humidity"] for r in readings if r.get("humidity") is not None
+        ]
 
         if not co2_values or not temp_values or not humidity_values:
             return None
 
         # Calculate days covered
         try:
-            timestamps = [r['timestamp'] for r in readings if r.get('timestamp')]
+            timestamps = [r["timestamp"] for r in readings if r.get("timestamp")]
             if timestamps:
-                first = datetime.fromisoformat(timestamps[0].replace('Z', '+00:00'))
-                last = datetime.fromisoformat(timestamps[-1].replace('Z', '+00:00'))
+                first = datetime.fromisoformat(timestamps[0].replace("Z", "+00:00"))
+                last = datetime.fromisoformat(timestamps[-1].replace("Z", "+00:00"))
                 days = max(1, (last - first).days)
             else:
                 days = 1
@@ -237,16 +236,15 @@ class AnalyticsService:
             humidity_mean=statistics.mean(humidity_values),
             humidity_min=min(humidity_values),
             humidity_max=max(humidity_values),
-            humidity_std=statistics.stdev(humidity_values) if len(humidity_values) > 1 else 0,
+            humidity_std=statistics.stdev(humidity_values)
+            if len(humidity_values) > 1
+            else 0,
             data_points=len(readings),
-            days=days
+            days=days,
         )
 
     def get_harvests_for_period(
-        self,
-        start_date: str,
-        end_date: str,
-        room_id: Optional[int] = None
+        self, start_date: str, end_date: str, room_id: Optional[int] = None
     ) -> List[Dict[str, Any]]:
         """
         Get harvest records for a period.
@@ -291,10 +289,7 @@ class AnalyticsService:
         return execute_query(query, ())
 
     def calculate_harvest_correlations(
-        self,
-        start_date: str,
-        end_date: str,
-        room_id: Optional[int] = None
+        self, start_date: str, end_date: str, room_id: Optional[int] = None
     ) -> Dict[str, Any]:
         """
         Calculate correlations between environmental conditions and harvest yields.
@@ -314,9 +309,9 @@ class AnalyticsService:
 
         results = {
             "harvest_count": len(harvests),
-            "total_yield": sum(h.get('yield_weight', 0) or 0 for h in harvests),
+            "total_yield": sum(h.get("yield_weight", 0) or 0 for h in harvests),
             "avg_yield": 0,
-            "correlations": {}
+            "correlations": {},
         }
 
         yields = []
@@ -326,63 +321,77 @@ class AnalyticsService:
 
         # For each harvest, get environmental data from the preceding 30 days
         for harvest in harvests:
-            if not harvest.get('yield_weight'):
+            if not harvest.get("yield_weight"):
                 continue
 
-            harvest_date = harvest.get('harvest_date', '')
+            harvest_date = harvest.get("harvest_date", "")
             if not harvest_date:
                 continue
 
             try:
-                harvest_dt = datetime.fromisoformat(harvest_date.replace('Z', '+00:00'))
+                harvest_dt = datetime.fromisoformat(harvest_date.replace("Z", "+00:00"))
                 start_dt = harvest_dt - timedelta(days=30)
 
                 # Get environmental readings for the grow period
                 env_data = self.get_readings_for_period(
                     start_dt.isoformat(),
                     harvest_dt.isoformat(),
-                    room_id=harvest.get('room_id')
+                    room_id=harvest.get("room_id"),
                 )
 
                 if env_data:
-                    co2_vals = [r['co2'] for r in env_data if r.get('co2')]
-                    temp_vals = [r['temperature'] for r in env_data if r.get('temperature')]
-                    humidity_vals = [r['humidity'] for r in env_data if r.get('humidity')]
+                    co2_vals = [r["co2"] for r in env_data if r.get("co2")]
+                    temp_vals = [
+                        r["temperature"] for r in env_data if r.get("temperature")
+                    ]
+                    humidity_vals = [
+                        r["humidity"] for r in env_data if r.get("humidity")
+                    ]
 
                     if co2_vals and temp_vals and humidity_vals:
-                        yields.append(harvest['yield_weight'])
+                        yields.append(harvest["yield_weight"])
                         co2_avgs.append(statistics.mean(co2_vals))
                         temp_avgs.append(statistics.mean(temp_vals))
                         humidity_avgs.append(statistics.mean(humidity_vals))
             except Exception as e:
-                self.logger.warning(f"Error processing harvest {harvest.get('harvest_id')}: {e}")
+                self.logger.warning(
+                    f"Error processing harvest {harvest.get('harvest_id')}: {e}"
+                )
                 continue
 
         if len(yields) >= 3:
             results["avg_yield"] = statistics.mean(yields)
 
             # Calculate correlations using Pearson correlation coefficient
-            results["correlations"]["co2"] = self._calculate_correlation(co2_avgs, yields)
-            results["correlations"]["temperature"] = self._calculate_correlation(temp_avgs, yields)
-            results["correlations"]["humidity"] = self._calculate_correlation(humidity_avgs, yields)
+            results["correlations"]["co2"] = self._calculate_correlation(
+                co2_avgs, yields
+            )
+            results["correlations"]["temperature"] = self._calculate_correlation(
+                temp_avgs, yields
+            )
+            results["correlations"]["humidity"] = self._calculate_correlation(
+                humidity_avgs, yields
+            )
 
             # Find optimal ranges from top performers
-            top_indices = sorted(range(len(yields)), key=lambda i: yields[i], reverse=True)[:max(1, len(yields) // 5)]
+            top_indices = sorted(
+                range(len(yields)), key=lambda i: yields[i], reverse=True
+            )[: max(1, len(yields) // 5)]
 
             if top_indices:
                 results["optimal_ranges"] = {
                     "co2": (
                         min(co2_avgs[i] for i in top_indices),
-                        max(co2_avgs[i] for i in top_indices)
+                        max(co2_avgs[i] for i in top_indices),
                     ),
                     "temperature": (
                         min(temp_avgs[i] for i in top_indices),
-                        max(temp_avgs[i] for i in top_indices)
+                        max(temp_avgs[i] for i in top_indices),
                     ),
                     "humidity": (
                         min(humidity_avgs[i] for i in top_indices),
-                        max(humidity_avgs[i] for i in top_indices)
-                    )
+                        max(humidity_avgs[i] for i in top_indices),
+                    ),
                 }
 
         return results
@@ -406,10 +415,7 @@ class AnalyticsService:
         return numerator / ((denominator_x * denominator_y) ** 0.5)
 
     def generate_insights(
-        self,
-        start_date: str,
-        end_date: str,
-        room_id: Optional[int] = None
+        self, start_date: str, end_date: str, room_id: Optional[int] = None
     ) -> List[Insight]:
         """
         Generate automated insights from historical data.
@@ -435,89 +441,113 @@ class AnalyticsService:
 
         # Insight 1: CO2 levels analysis
         if stats.co2_mean < 800:
-            insights.append(Insight(
-                type='warning',
-                title='Low CO2 Levels',
-                message=f'Average CO2 is {stats.co2_mean:.0f} ppm. Consider increasing CO2 supplementation for optimal growth.',
-                metric='co2',
-                action='Increase CO2 supplementation or improve air circulation'
-            ))
+            insights.append(
+                Insight(
+                    type="warning",
+                    title="Low CO2 Levels",
+                    message=f"Average CO2 is {stats.co2_mean:.0f} ppm. Consider increasing CO2 supplementation for optimal growth.",
+                    metric="co2",
+                    action="Increase CO2 supplementation or improve air circulation",
+                )
+            )
         elif stats.co2_mean > 2000:
-            insights.append(Insight(
-                type='warning',
-                title='High CO2 Levels',
-                message=f'Average CO2 is {stats.co2_mean:.0f} ppm. This may indicate insufficient air exchange.',
-                metric='co2',
-                action='Increase fresh air exchange frequency'
-            ))
+            insights.append(
+                Insight(
+                    type="warning",
+                    title="High CO2 Levels",
+                    message=f"Average CO2 is {stats.co2_mean:.0f} ppm. This may indicate insufficient air exchange.",
+                    metric="co2",
+                    action="Increase fresh air exchange frequency",
+                )
+            )
         elif 1000 <= stats.co2_mean <= 1500:
-            insights.append(Insight(
-                type='success',
-                title='Optimal CO2 Range',
-                message=f'CO2 averaging {stats.co2_mean:.0f} ppm is in the ideal range for mushroom growth.',
-                metric='co2',
-                action='Maintain current CO2 management'
-            ))
+            insights.append(
+                Insight(
+                    type="success",
+                    title="Optimal CO2 Range",
+                    message=f"CO2 averaging {stats.co2_mean:.0f} ppm is in the ideal range for mushroom growth.",
+                    metric="co2",
+                    action="Maintain current CO2 management",
+                )
+            )
 
         # Insight 2: Temperature stability
         if stats.temp_std > 3:
-            insights.append(Insight(
-                type='warning',
-                title='Temperature Fluctuations',
-                message=f'Temperature varies by ±{stats.temp_std:.1f}°. Stable temperatures improve yields.',
-                metric='temperature',
-                action='Check HVAC system and insulation'
-            ))
+            insights.append(
+                Insight(
+                    type="warning",
+                    title="Temperature Fluctuations",
+                    message=f"Temperature varies by ±{stats.temp_std:.1f}°. Stable temperatures improve yields.",
+                    metric="temperature",
+                    action="Check HVAC system and insulation",
+                )
+            )
         elif stats.temp_std < 1:
-            insights.append(Insight(
-                type='success',
-                title='Excellent Temperature Stability',
-                message=f'Temperature is very stable with only ±{stats.temp_std:.1f}° variation.',
-                metric='temperature',
-                action='Continue current temperature management'
-            ))
+            insights.append(
+                Insight(
+                    type="success",
+                    title="Excellent Temperature Stability",
+                    message=f"Temperature is very stable with only ±{stats.temp_std:.1f}° variation.",
+                    metric="temperature",
+                    action="Continue current temperature management",
+                )
+            )
 
         # Insight 3: Humidity patterns
-        low_humidity_count = sum(1 for r in readings if r.get('humidity') and r['humidity'] < 60)
+        low_humidity_count = sum(
+            1 for r in readings if r.get("humidity") and r["humidity"] < 60
+        )
         low_humidity_pct = (low_humidity_count / len(readings)) * 100 if readings else 0
 
         if low_humidity_pct > 20:
-            insights.append(Insight(
-                type='warning',
-                title='Low Humidity Periods',
-                message=f'Humidity drops below 60% about {low_humidity_pct:.0f}% of the time.',
-                metric='humidity',
-                action='Consider adding humidification during dry periods'
-            ))
+            insights.append(
+                Insight(
+                    type="warning",
+                    title="Low Humidity Periods",
+                    message=f"Humidity drops below 60% about {low_humidity_pct:.0f}% of the time.",
+                    metric="humidity",
+                    action="Consider adding humidification during dry periods",
+                )
+            )
 
-        high_humidity_count = sum(1 for r in readings if r.get('humidity') and r['humidity'] > 95)
-        high_humidity_pct = (high_humidity_count / len(readings)) * 100 if readings else 0
+        high_humidity_count = sum(
+            1 for r in readings if r.get("humidity") and r["humidity"] > 95
+        )
+        high_humidity_pct = (
+            (high_humidity_count / len(readings)) * 100 if readings else 0
+        )
 
         if high_humidity_pct > 30:
-            insights.append(Insight(
-                type='info',
-                title='High Humidity Levels',
-                message=f'Humidity exceeds 95% about {high_humidity_pct:.0f}% of the time.',
-                metric='humidity',
-                action='Monitor for condensation and potential contamination'
-            ))
+            insights.append(
+                Insight(
+                    type="info",
+                    title="High Humidity Levels",
+                    message=f"Humidity exceeds 95% about {high_humidity_pct:.0f}% of the time.",
+                    metric="humidity",
+                    action="Monitor for condensation and potential contamination",
+                )
+            )
 
         # Insight 4: Data coverage
         if stats.data_points < stats.days * 24:
-            coverage = (stats.data_points / (stats.days * 24)) * 100 if stats.days > 0 else 0
+            coverage = (
+                (stats.data_points / (stats.days * 24)) * 100 if stats.days > 0 else 0
+            )
             if coverage < 50:
-                insights.append(Insight(
-                    type='info',
-                    title='Data Coverage Gap',
-                    message=f'Only {coverage:.0f}% data coverage for the period. Some devices may be offline.',
-                    metric='data',
-                    action='Check device connectivity and polling intervals'
-                ))
+                insights.append(
+                    Insight(
+                        type="info",
+                        title="Data Coverage Gap",
+                        message=f"Only {coverage:.0f}% data coverage for the period. Some devices may be offline.",
+                        metric="data",
+                        action="Check device connectivity and polling intervals",
+                    )
+                )
 
         # Insight 5: Harvest analysis (if available)
         harvests = self.get_harvests_for_period(start_date, end_date, room_id)
         if harvests and len(harvests) >= 3:
-            yields = [h['yield_weight'] for h in harvests if h.get('yield_weight')]
+            yields = [h["yield_weight"] for h in harvests if h.get("yield_weight")]
             if len(yields) >= 3:
                 # Sort by date and compare recent vs earlier
                 recent_yields = yields[-3:]
@@ -528,22 +558,26 @@ class AnalyticsService:
 
                 if recent_avg > earlier_avg * 1.1:
                     improvement = ((recent_avg / earlier_avg) - 1) * 100
-                    insights.append(Insight(
-                        type='success',
-                        title='Improving Yields',
-                        message=f'Recent harvests average {improvement:.0f}% higher than earlier ones.',
-                        metric='yield',
-                        action='Continue current practices'
-                    ))
+                    insights.append(
+                        Insight(
+                            type="success",
+                            title="Improving Yields",
+                            message=f"Recent harvests average {improvement:.0f}% higher than earlier ones.",
+                            metric="yield",
+                            action="Continue current practices",
+                        )
+                    )
                 elif recent_avg < earlier_avg * 0.9:
                     decline = (1 - (recent_avg / earlier_avg)) * 100
-                    insights.append(Insight(
-                        type='warning',
-                        title='Declining Yields',
-                        message=f'Recent harvests average {decline:.0f}% lower than earlier ones.',
-                        metric='yield',
-                        action='Review environmental conditions and substrate quality'
-                    ))
+                    insights.append(
+                        Insight(
+                            type="warning",
+                            title="Declining Yields",
+                            message=f"Recent harvests average {decline:.0f}% lower than earlier ones.",
+                            metric="yield",
+                            action="Review environmental conditions and substrate quality",
+                        )
+                    )
 
         return insights
 
@@ -561,9 +595,11 @@ class AnalyticsService:
             params.append(room_id)
 
         result = execute_query(query, tuple(params))
-        return result[0]['count'] if result else 0
+        return result[0]["count"] if result else 0
 
-    def get_date_range(self, room_id: Optional[int] = None) -> Tuple[Optional[str], Optional[str]]:
+    def get_date_range(
+        self, room_id: Optional[int] = None
+    ) -> Tuple[Optional[str], Optional[str]]:
         """Get the date range of available data."""
         query = """
         SELECT
@@ -579,6 +615,6 @@ class AnalyticsService:
             params.append(room_id)
 
         result = execute_query(query, tuple(params))
-        if result and result[0]['min_date']:
-            return result[0]['min_date'], result[0]['max_date']
+        if result and result[0]["min_date"]:
+            return result[0]["min_date"], result[0]["max_date"]
         return None, None

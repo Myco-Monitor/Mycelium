@@ -97,13 +97,9 @@ Mycelium/
 │   ├── app_config.json     # Application configuration
 │   └── ca_root.pem         # Myco-Monitor CA root certificate
 ├── data/                   # SQLite DB, firmware binaries, exports
-├── tests/                  # Unit and integration tests
 ├── run.py                  # Application entry point
 ├── setup.py                # Setup and installation script
-├── requirements.txt        # Python dependencies
-├── app.py                  # Legacy Dash application (kept during migration)
-├── pages/                  # Legacy Dash pages (kept during migration)
-└── components/             # Legacy Dash components (kept during migration)
+└── requirements.txt        # Python dependencies
 ```
 
 ---
@@ -147,12 +143,6 @@ Mycelium/
 
    # Custom host/port
    python run.py --host 0.0.0.0 --port 8080
-
-   # Sentinel mode (simulated devices for testing)
-   python run.py --sentinel --dev
-
-   # Legacy Dash application (port 8050, requires dash installed)
-   python run.py --legacy
    ```
 
 5. **Open your browser to:**
@@ -172,8 +162,6 @@ Options:
   --port PORT     Port to bind to (default: 8051)
   --debug         Enable debug mode
   --dev           Development mode (hot reload, verbose logging)
-  --sentinel      Use Sentinel simulators for testing
-  --legacy        Run legacy Dash application on port 8050
 ```
 
 ---
@@ -217,10 +205,6 @@ Application settings are in `config/app_config.json`:
 - API key authentication with SHA-256 hashing for REST API
 - Rate limiting on API endpoints
 - All data stays local — no cloud dependency
-
-To open a device's web page directly in your browser without a certificate
-warning, install the Myco-Monitor CA root into your trust store — see
-[Trusting Your Device Certificates](docs/trusting-device-certificates.md).
 
 ---
 

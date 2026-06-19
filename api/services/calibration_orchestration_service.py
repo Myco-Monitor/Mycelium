@@ -8,9 +8,7 @@ Manages CO2 sensor calibration for Spore devices:
 - Log calibration events to the database
 """
 
-import asyncio
 import logging
-from datetime import datetime
 from typing import Dict, Any, Optional, List
 
 from storage.tables.device_spore import get_device_spore
@@ -34,7 +32,7 @@ class CalibrationOrchestrationService:
         if not device:
             return None
 
-        ip = device.get('ip_address')
+        ip = device.get("hostname")
         if not ip:
             return None
 
@@ -61,7 +59,9 @@ class CalibrationOrchestrationService:
                     if resp.status == 200:
                         return await resp.json()
         except Exception as e:
-            self.logger.warning(f"Failed to get calibration status from Spore {device_id}: {e}")
+            self.logger.warning(
+                f"Failed to get calibration status from Spore {device_id}: {e}"
+            )
 
         return None
 
@@ -82,13 +82,13 @@ class CalibrationOrchestrationService:
         """
         device = get_device_spore(device_id)
         if not device:
-            return {'success': False, 'message': 'Device not found'}
+            return {"success": False, "message": "Device not found"}
 
-        ip = device.get('ip_address')
+        ip = device.get("hostname")
         if not ip:
-            return {'success': False, 'message': 'Device has no IP address'}
+            return {"success": False, "message": "Device has no IP address"}
 
-        pin = get_device_pin(device_id, 'spore')
+        pin = get_device_pin(device_id, "spore")
 
         from api.clients.base_client import _CA_CERT_PATH
         from pathlib import Path
@@ -106,9 +106,9 @@ class CalibrationOrchestrationService:
         connector = aiohttp.TCPConnector(ssl=ssl_ctx)
         try:
             async with aiohttp.ClientSession(connector=connector) as session:
-                payload = {'target_ppm': target_ppm}
+                payload = {"target_ppm": target_ppm}
                 if pin:
-                    payload['pin'] = pin
+                    payload["pin"] = pin
 
                 async with session.post(
                     f"https://{ip}/api/calibrate",
@@ -117,31 +117,49 @@ class CalibrationOrchestrationService:
                 ) as resp:
                     body = await resp.text()
                     if resp.status == 200:
-                        self._log_calibration(device_id, 'remote', target_ppm, 'completed')
-                        return {'success': True, 'message': f'Calibration triggered at {target_ppm} ppm'}
+                        self._log_calibration(
+                            device_id, "remote", target_ppm, "completed"
+                        )
+                        return {
+                            "success": True,
+                            "message": f"Calibration triggered at {target_ppm} ppm",
+                        }
                     else:
-                        self._log_calibration(device_id, 'remote', target_ppm, 'failed', body)
-                        return {'success': False, 'message': f'Calibration failed ({resp.status}): {body}'}
+                        self._log_calibration(
+                            device_id, "remote", target_ppm, "failed", body
+                        )
+                        return {
+                            "success": False,
+                            "message": f"Calibration failed ({resp.status}): {body}",
+                        }
 
         except Exception as e:
-            self._log_calibration(device_id, 'remote', target_ppm, 'failed', str(e))
-            return {'success': False, 'message': str(e)}
+            self._log_calibration(device_id, "remote", target_ppm, "failed", str(e))
+            return {"success": False, "message": str(e)}
 
-    def get_calibration_history(self, device_id: int = None, limit: int = 50) -> List[Dict]:
+    def get_calibration_history(
+        self, device_id: int = None, limit: int = 50
+    ) -> List[Dict]:
         """Get calibration history from the database."""
         try:
             from storage.tables.calibration_history import get_calibration_history
+
             return get_calibration_history(device_id=device_id, limit=limit)
         except Exception:
             return []
 
     def _log_calibration(
-        self, device_id: int, cal_type: str, target_ppm: int,
-        status: str, notes: str = None
+        self,
+        device_id: int,
+        cal_type: str,
+        target_ppm: int,
+        status: str,
+        notes: str = None,
     ):
         """Log a calibration event to the database."""
         try:
             from storage.tables.calibration_history import create_calibration_event
+
             create_calibration_event(device_id, cal_type, target_ppm, status, notes)
         except Exception as e:
             self.logger.error(f"Failed to log calibration event: {e}")

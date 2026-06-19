@@ -16,7 +16,7 @@ def log_health_check(
     is_online: bool,
     response_time_ms: Optional[int] = None,
     error_message: Optional[str] = None,
-    http_status_code: Optional[int] = None
+    http_status_code: Optional[int] = None,
 ) -> int:
     """
     Log a health check result.
@@ -35,11 +35,21 @@ def log_health_check(
     conn = get_connection()
     cursor = conn.cursor()
 
-    cursor.execute("""
+    cursor.execute(
+        """
         INSERT INTO device_health_log
         (device_id, device_type, is_online, response_time_ms, error_message, http_status_code)
         VALUES (?, ?, ?, ?, ?, ?)
-    """, (device_id, device_type, 1 if is_online else 0, response_time_ms, error_message, http_status_code))
+    """,
+        (
+            device_id,
+            device_type,
+            1 if is_online else 0,
+            response_time_ms,
+            error_message,
+            http_status_code,
+        ),
+    )
 
     conn.commit()
     log_id = cursor.lastrowid
@@ -49,9 +59,7 @@ def log_health_check(
 
 
 def get_health_history(
-    device_id: int,
-    device_type: str,
-    hours: int = 24
+    device_id: int, device_type: str, hours: int = 24
 ) -> List[Dict[str, Any]]:
     """
     Get health check history for a device.
@@ -69,12 +77,15 @@ def get_health_history(
     conn = get_connection()
     cursor = conn.cursor()
 
-    cursor.execute("""
+    cursor.execute(
+        """
         SELECT * FROM device_health_log
         WHERE device_id = ? AND device_type = ?
         AND check_time >= ?
         ORDER BY check_time DESC
-    """, (device_id, device_type, cutoff))
+    """,
+        (device_id, device_type, cutoff),
+    )
 
     columns = [description[0] for description in cursor.description]
     results = [dict(zip(columns, row)) for row in cursor.fetchall()]
@@ -83,10 +94,7 @@ def get_health_history(
     return results
 
 
-def get_recent_status(
-    device_id: int,
-    device_type: str
-) -> Optional[Dict[str, Any]]:
+def get_recent_status(device_id: int, device_type: str) -> Optional[Dict[str, Any]]:
     """
     Get most recent health check for a device.
 
@@ -100,11 +108,14 @@ def get_recent_status(
     conn = get_connection()
     cursor = conn.cursor()
 
-    cursor.execute("""
+    cursor.execute(
+        """
         SELECT * FROM device_health_log
         WHERE device_id = ? AND device_type = ?
         ORDER BY check_time DESC LIMIT 1
-    """, (device_id, device_type))
+    """,
+        (device_id, device_type),
+    )
 
     row = cursor.fetchone()
     if row:
@@ -117,11 +128,7 @@ def get_recent_status(
     return result
 
 
-def calculate_uptime(
-    device_id: int,
-    device_type: str,
-    hours: int = 24
-) -> float:
+def calculate_uptime(device_id: int, device_type: str, hours: int = 24) -> float:
     """
     Calculate uptime percentage over a period.
 
@@ -137,14 +144,12 @@ def calculate_uptime(
     if not history:
         return 0.0
 
-    online_count = sum(1 for h in history if h.get('is_online'))
+    online_count = sum(1 for h in history if h.get("is_online"))
     return (online_count / len(history)) * 100
 
 
 def calculate_avg_response_time(
-    device_id: int,
-    device_type: str,
-    hours: int = 24
+    device_id: int, device_type: str, hours: int = 24
 ) -> Optional[float]:
     """
     Calculate average response time over a period.
@@ -158,7 +163,9 @@ def calculate_avg_response_time(
         Average response time in milliseconds, or None if no data
     """
     history = get_health_history(device_id, device_type, hours)
-    response_times = [h['response_time_ms'] for h in history if h.get('response_time_ms') is not None]
+    response_times = [
+        h["response_time_ms"] for h in history if h.get("response_time_ms") is not None
+    ]
 
     if not response_times:
         return None
@@ -166,10 +173,7 @@ def calculate_avg_response_time(
     return sum(response_times) / len(response_times)
 
 
-def get_device_health_metrics(
-    device_id: int,
-    device_type: str
-) -> Dict[str, Any]:
+def get_device_health_metrics(device_id: int, device_type: str) -> Dict[str, Any]:
     """
     Get comprehensive health metrics for a device.
 
@@ -181,11 +185,11 @@ def get_device_health_metrics(
         Dictionary with uptime, response times, and recent status
     """
     return {
-        'uptime_24h': calculate_uptime(device_id, device_type, 24),
-        'uptime_7d': calculate_uptime(device_id, device_type, 168),
-        'avg_response_24h': calculate_avg_response_time(device_id, device_type, 24),
-        'recent_status': get_recent_status(device_id, device_type),
-        'check_count_24h': len(get_health_history(device_id, device_type, 24))
+        "uptime_24h": calculate_uptime(device_id, device_type, 24),
+        "uptime_7d": calculate_uptime(device_id, device_type, 168),
+        "avg_response_24h": calculate_avg_response_time(device_id, device_type, 24),
+        "recent_status": get_recent_status(device_id, device_type),
+        "check_count_24h": len(get_health_history(device_id, device_type, 24)),
     }
 
 
@@ -204,10 +208,13 @@ def cleanup_old_records(days: int = 7) -> int:
     conn = get_connection()
     cursor = conn.cursor()
 
-    cursor.execute("""
+    cursor.execute(
+        """
         DELETE FROM device_health_log
         WHERE check_time < ?
-    """, (cutoff,))
+    """,
+        (cutoff,),
+    )
 
     deleted_count = cursor.rowcount
     conn.commit()

@@ -8,9 +8,8 @@ readings to fill in data gaps from the offline period.
 - Hyphae: GET /api/pressure/history and GET /api/errors/history
 """
 
-import asyncio
 import logging
-from typing import Dict, Any, Optional, Set
+from typing import Set
 
 from storage.tables.device_spore import get_device_spore
 from storage.tables.device_hyphae import get_device_hyphae
@@ -45,11 +44,13 @@ class ReconnectionService:
         Should be called by the polling service when a device transitions
         from offline to online.
         """
-        self.logger.info(f"Reconnection detected: {device_type} {device_id} — pulling cached data")
+        self.logger.info(
+            f"Reconnection detected: {device_type} {device_id} — pulling cached data"
+        )
 
-        if device_type == 'spore':
+        if device_type == "spore":
             await self._pull_spore_cached_data(device_id)
-        elif device_type == 'hyphae':
+        elif device_type == "hyphae":
             await self._pull_hyphae_cached_data(device_id)
 
     async def _pull_spore_cached_data(self, device_id: int):
@@ -58,7 +59,7 @@ class ReconnectionService:
         if not device:
             return
 
-        ip = device.get('ip_address')
+        ip = device.get("hostname")
         if not ip:
             return
 
@@ -67,27 +68,37 @@ class ReconnectionService:
             # Pull raw readings cache
             async with session.get(
                 f"https://{ip}/api/readings/raw/all",
-                timeout=__import__('aiohttp').ClientTimeout(total=15),
+                timeout=__import__("aiohttp").ClientTimeout(total=15),
             ) as resp:
                 if resp.status == 200:
                     data = await resp.json()
-                    readings = data if isinstance(data, list) else data.get('readings', [])
-                    self.logger.info(f"Pulled {len(readings)} cached raw readings from Spore {device_id}")
+                    readings = (
+                        data if isinstance(data, list) else data.get("readings", [])
+                    )
+                    self.logger.info(
+                        f"Pulled {len(readings)} cached raw readings from Spore {device_id}"
+                    )
                     # Store readings
                     self._store_spore_readings(device_id, readings)
 
             # Pull EMA readings cache
             async with session.get(
                 f"https://{ip}/api/readings/ema/all",
-                timeout=__import__('aiohttp').ClientTimeout(total=15),
+                timeout=__import__("aiohttp").ClientTimeout(total=15),
             ) as resp:
                 if resp.status == 200:
                     data = await resp.json()
-                    readings = data if isinstance(data, list) else data.get('readings', [])
-                    self.logger.info(f"Pulled {len(readings)} cached EMA readings from Spore {device_id}")
+                    readings = (
+                        data if isinstance(data, list) else data.get("readings", [])
+                    )
+                    self.logger.info(
+                        f"Pulled {len(readings)} cached EMA readings from Spore {device_id}"
+                    )
 
         except Exception as e:
-            self.logger.warning(f"Failed to pull cached data from Spore {device_id}: {e}")
+            self.logger.warning(
+                f"Failed to pull cached data from Spore {device_id}: {e}"
+            )
         finally:
             await session.close()
 
@@ -97,7 +108,7 @@ class ReconnectionService:
         if not device:
             return
 
-        ip = device.get('ip_address')
+        ip = device.get("hostname")
         if not ip:
             return
 
@@ -106,25 +117,33 @@ class ReconnectionService:
             # Pull pressure history
             async with session.get(
                 f"https://{ip}/api/pressure/history",
-                timeout=__import__('aiohttp').ClientTimeout(total=15),
+                timeout=__import__("aiohttp").ClientTimeout(total=15),
             ) as resp:
                 if resp.status == 200:
                     data = await resp.json()
-                    entries = data if isinstance(data, list) else data.get('history', [])
-                    self.logger.info(f"Pulled {len(entries)} cached pressure entries from Hyphae {device_id}")
+                    entries = (
+                        data if isinstance(data, list) else data.get("history", [])
+                    )
+                    self.logger.info(
+                        f"Pulled {len(entries)} cached pressure entries from Hyphae {device_id}"
+                    )
 
             # Pull error history
             async with session.get(
                 f"https://{ip}/api/errors/history",
-                timeout=__import__('aiohttp').ClientTimeout(total=10),
+                timeout=__import__("aiohttp").ClientTimeout(total=10),
             ) as resp:
                 if resp.status == 200:
                     data = await resp.json()
-                    errors = data if isinstance(data, list) else data.get('errors', [])
-                    self.logger.info(f"Pulled {len(errors)} cached error entries from Hyphae {device_id}")
+                    errors = data if isinstance(data, list) else data.get("errors", [])
+                    self.logger.info(
+                        f"Pulled {len(errors)} cached error entries from Hyphae {device_id}"
+                    )
 
         except Exception as e:
-            self.logger.warning(f"Failed to pull cached data from Hyphae {device_id}: {e}")
+            self.logger.warning(
+                f"Failed to pull cached data from Hyphae {device_id}: {e}"
+            )
         finally:
             await session.close()
 
@@ -150,13 +169,16 @@ class ReconnectionService:
         """Store cached spore readings into the database."""
         try:
             from storage.tables.readings_spore import create_reading
+
             for reading in readings:
                 create_reading(
                     device_id=device_id,
-                    temperature=reading.get('temperature'),
-                    humidity=reading.get('humidity'),
-                    co2=reading.get('co2'),
-                    reading_ts=reading.get('timestamp'),
+                    temperature=reading.get("temperature"),
+                    humidity=reading.get("humidity"),
+                    co2=reading.get("co2"),
+                    reading_ts=reading.get("timestamp"),
                 )
         except Exception as e:
-            self.logger.warning(f"Failed to store cached readings for Spore {device_id}: {e}")
+            self.logger.warning(
+                f"Failed to store cached readings for Spore {device_id}: {e}"
+            )

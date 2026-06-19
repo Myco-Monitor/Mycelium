@@ -44,29 +44,34 @@ import web_ui.pages.relay_scheduler  # noqa: E402, F401
 
 # --- Root redirect ---
 
-@ui.page('/')
+
+@ui.page("/")
 def root_redirect():
     """Redirect root to dashboard or login."""
     user = app.storage.user
-    if user.get('user_id'):
-        ui.navigate.to('/main')
+    if user.get("user_id"):
+        ui.navigate.to("/main")
     else:
         from storage.tables.user_settings import count_users
+
         if count_users() > 0:
-            ui.navigate.to('/login')
+            ui.navigate.to("/login")
         else:
-            ui.navigate.to('/signup')
+            ui.navigate.to("/signup")
 
 
 # --- REST API mount ---
 
+
 def mount_rest_api():
     """Mount the FastAPI REST API router."""
     from api.rest_api_fastapi import api_router
+
     app.include_router(api_router)
 
 
 # --- Lifecycle hooks ---
+
 
 @app.on_startup
 async def on_startup():
@@ -75,6 +80,7 @@ async def on_startup():
     mount_rest_api()
 
     from api.services.polling_service import PollingService
+
     _polling_service = PollingService()
     await _polling_service.start()
     logger.info("Polling service started")

@@ -27,11 +27,7 @@ class NotificationService:
         self._encryption_key = encryption_key
 
     def send_alert_notification(
-        self,
-        alert_id: int,
-        rule: Dict[str, Any],
-        device: Dict[str, Any],
-        message: str
+        self, alert_id: int, rule: Dict[str, Any], device: Dict[str, Any], message: str
     ) -> bool:
         """
         Send notification for an alert based on rule configuration.
@@ -45,17 +41,17 @@ class NotificationService:
         Returns:
             True if notification sent successfully
         """
-        method = rule.get('notification_method', 'ui')
-        target = rule.get('notification_target')
+        method = rule.get("notification_method", "ui")
+        target = rule.get("notification_target")
 
-        if method == 'ui':
+        if method == "ui":
             # UI notifications are handled by the dashboard
             return True
 
-        if method == 'email' and target:
+        if method == "email" and target:
             return self.send_email_alert(alert_id, target, rule, device, message)
 
-        if method == 'webhook' and target:
+        if method == "webhook" and target:
             return self.send_webhook_alert(alert_id, target, rule, device, message)
 
         return False
@@ -68,7 +64,7 @@ class NotificationService:
         recipient: str,
         rule: Dict[str, Any],
         device: Dict[str, Any],
-        message: str
+        message: str,
     ) -> bool:
         """
         Send alert notification via email.
@@ -84,7 +80,7 @@ class NotificationService:
             True if sent successfully
         """
         settings = self._get_email_settings_for_recipient(recipient)
-        if not settings or not settings.get('email_enabled'):
+        if not settings or not settings.get("email_enabled"):
             self.logger.warning(f"Email not configured for {recipient}")
             return False
 
@@ -102,9 +98,9 @@ class NotificationService:
 
             notification_log.log_notification(
                 alert_id=alert_id,
-                notification_method='email',
+                notification_method="email",
                 recipient=recipient,
-                status='sent'
+                status="sent",
             )
 
             self.logger.info(f"Email sent to {recipient}")
@@ -113,66 +109,59 @@ class NotificationService:
         except Exception as e:
             notification_log.log_notification(
                 alert_id=alert_id,
-                notification_method='email',
+                notification_method="email",
                 recipient=recipient,
-                status='failed',
-                error_message=str(e)
+                status="failed",
+                error_message=str(e),
             )
 
             self.logger.error(f"Email failed to {recipient}: {e}")
             return False
 
     def _send_smtp_email(
-        self,
-        settings: Dict[str, Any],
-        recipient: str,
-        subject: str,
-        body: str
+        self, settings: Dict[str, Any], recipient: str, subject: str, body: str
     ):
         """Send email via SMTP."""
-        msg = MIMEMultipart('alternative')
-        msg['Subject'] = subject
-        msg['From'] = settings.get('smtp_username', 'mycelium@localhost')
-        msg['To'] = recipient
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = subject
+        msg["From"] = settings.get("smtp_username", "mycelium@localhost")
+        msg["To"] = recipient
 
         # Plain text version
-        text_part = MIMEText(body, 'plain')
+        text_part = MIMEText(body, "plain")
         msg.attach(text_part)
 
         # HTML version
         html_body = self._build_html_email(body)
-        html_part = MIMEText(html_body, 'html')
+        html_part = MIMEText(html_body, "html")
         msg.attach(html_part)
 
         # Connect and send
-        smtp_server = settings['smtp_server']
-        smtp_port = settings.get('smtp_port', 587)
-        use_tls = settings.get('smtp_use_tls', 1)
+        smtp_server = settings["smtp_server"]
+        smtp_port = settings.get("smtp_port", 587)
+        use_tls = settings.get("smtp_use_tls", 1)
 
         with smtplib.SMTP(smtp_server, smtp_port, timeout=30) as server:
             if use_tls:
                 server.starttls()
-            username = settings.get('smtp_username')
-            password = settings.get('smtp_password_encrypted')
+            username = settings.get("smtp_username")
+            password = settings.get("smtp_password_encrypted")
             if username and password:
                 decrypted_password = self._decrypt_password(password)
                 server.login(username, decrypted_password)
             server.send_message(msg)
 
     def _build_email_body(
-        self,
-        rule: Dict[str, Any],
-        device: Dict[str, Any],
-        message: str
+        self, rule: Dict[str, Any], device: Dict[str, Any], message: str
     ) -> str:
         """Build plain text email body."""
         return f"""
 Myco-Monitor Alert
 
-Alert: {rule.get('rule_name', 'Unknown')}
-Type: {rule.get('rule_type', 'unknown')}
-Device: {device.get('device_name', 'Unknown')} ({device.get('device_type', 'unknown')})
-Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+Alert: {rule.get("rule_name", "Unknown")}
+Type: {rule.get("rule_type", "unknown")}
+Device: {device.get("device_name", "Unknown")} ({device.get("device_type", "unknown")})
+Time: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
 
 Message:
 {message}
@@ -210,7 +199,7 @@ Log in to your dashboard to acknowledge or resolve this alert.
         webhook_url: str,
         rule: Dict[str, Any],
         device: Dict[str, Any],
-        message: str
+        message: str,
     ) -> bool:
         """
         Send alert notification via webhook.
@@ -230,34 +219,34 @@ Log in to your dashboard to acknowledge or resolve this alert.
             "timestamp": datetime.utcnow().isoformat() + "Z",
             "alert": {
                 "id": alert_id,
-                "rule_name": rule.get('rule_name'),
-                "rule_type": rule.get('rule_type'),
-                "message": message
+                "rule_name": rule.get("rule_name"),
+                "rule_type": rule.get("rule_type"),
+                "message": message,
             },
             "device": {
-                "id": device.get('device_id'),
-                "name": device.get('device_name'),
-                "type": device.get('device_type'),
-                "ip_address": device.get('ip_address')
-            }
+                "id": device.get("device_id"),
+                "name": device.get("device_name"),
+                "type": device.get("device_type"),
+                "hostname": device.get("hostname"),
+            },
         }
 
         try:
             response = requests.post(
                 webhook_url,
                 json=payload,
-                headers={'Content-Type': 'application/json'},
-                timeout=10
+                headers={"Content-Type": "application/json"},
+                timeout=10,
             )
 
             success = response.status_code < 400
 
             notification_log.log_notification(
                 alert_id=alert_id,
-                notification_method='webhook',
+                notification_method="webhook",
                 recipient=webhook_url,
-                status='sent' if success else 'failed',
-                error_message=None if success else f"HTTP {response.status_code}"
+                status="sent" if success else "failed",
+                error_message=None if success else f"HTTP {response.status_code}",
             )
 
             if success:
@@ -270,10 +259,10 @@ Log in to your dashboard to acknowledge or resolve this alert.
         except requests.RequestException as e:
             notification_log.log_notification(
                 alert_id=alert_id,
-                notification_method='webhook',
+                notification_method="webhook",
                 recipient=webhook_url,
-                status='failed',
-                error_message=str(e)
+                status="failed",
+                error_message=str(e),
             )
 
             self.logger.error(f"Webhook failed to {webhook_url}: {e}")
@@ -286,10 +275,13 @@ Log in to your dashboard to acknowledge or resolve this alert.
         conn = get_connection()
         cursor = conn.cursor()
 
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT * FROM notification_settings
             WHERE email_address = ?
-        """, (email,))
+        """,
+            (email,),
+        )
 
         row = cursor.fetchone()
         if row:
@@ -306,10 +298,13 @@ Log in to your dashboard to acknowledge or resolve this alert.
         conn = get_connection()
         cursor = conn.cursor()
 
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT * FROM notification_settings
             WHERE user_id = ?
-        """, (user_id,))
+        """,
+            (user_id,),
+        )
 
         row = cursor.fetchone()
         if row:
@@ -329,7 +324,7 @@ Log in to your dashboard to acknowledge or resolve this alert.
         smtp_port: int,
         smtp_username: str,
         smtp_password: str,
-        use_tls: bool = True
+        use_tls: bool = True,
     ) -> bool:
         """
         Save email notification settings.
@@ -351,7 +346,8 @@ Log in to your dashboard to acknowledge or resolve this alert.
         conn = get_connection()
         cursor = conn.cursor()
 
-        cursor.execute("""
+        cursor.execute(
+            """
             INSERT INTO notification_settings
             (user_id, email_enabled, email_address, smtp_server, smtp_port,
              smtp_username, smtp_password_encrypted, smtp_use_tls)
@@ -365,19 +361,24 @@ Log in to your dashboard to acknowledge or resolve this alert.
                 smtp_password_encrypted = excluded.smtp_password_encrypted,
                 smtp_use_tls = excluded.smtp_use_tls,
                 updated_at = CURRENT_TIMESTAMP
-        """, (user_id, email_address, smtp_server, smtp_port,
-              smtp_username, encrypted_password, 1 if use_tls else 0))
+        """,
+            (
+                user_id,
+                email_address,
+                smtp_server,
+                smtp_port,
+                smtp_username,
+                encrypted_password,
+                1 if use_tls else 0,
+            ),
+        )
 
         conn.commit()
         conn.close()
         return True
 
     def save_quiet_hours(
-        self,
-        user_id: int,
-        enabled: bool,
-        start_time: str,
-        end_time: str
+        self, user_id: int, enabled: bool, start_time: str, end_time: str
     ) -> bool:
         """
         Save quiet hours preferences.
@@ -394,14 +395,17 @@ Log in to your dashboard to acknowledge or resolve this alert.
         conn = get_connection()
         cursor = conn.cursor()
 
-        cursor.execute("""
+        cursor.execute(
+            """
             UPDATE notification_settings
             SET quiet_hours_enabled = ?,
                 quiet_hours_start = ?,
                 quiet_hours_end = ?,
                 updated_at = CURRENT_TIMESTAMP
             WHERE user_id = ?
-        """, (1 if enabled else 0, start_time, end_time, user_id))
+        """,
+            (1 if enabled else 0, start_time, end_time, user_id),
+        )
 
         conn.commit()
         success = cursor.rowcount > 0
@@ -414,11 +418,14 @@ Log in to your dashboard to acknowledge or resolve this alert.
         conn = get_connection()
         cursor = conn.cursor()
 
-        cursor.execute("""
+        cursor.execute(
+            """
             UPDATE notification_settings
             SET email_enabled = 0, updated_at = CURRENT_TIMESTAMP
             WHERE user_id = ?
-        """, (user_id,))
+        """,
+            (user_id,),
+        )
 
         conn.commit()
         success = cursor.rowcount > 0
@@ -426,7 +433,9 @@ Log in to your dashboard to acknowledge or resolve this alert.
 
         return success
 
-    def test_email_settings(self, settings: Dict[str, Any], test_recipient: str) -> Dict[str, Any]:
+    def test_email_settings(
+        self, settings: Dict[str, Any], test_recipient: str
+    ) -> Dict[str, Any]:
         """
         Test email settings by sending a test message.
 
@@ -442,7 +451,7 @@ Log in to your dashboard to acknowledge or resolve this alert.
                 settings=settings,
                 recipient=test_recipient,
                 subject="[Myco-Monitor] Test Email",
-                body="This is a test email from Myco-Monitor.\n\nIf you receive this, your email settings are configured correctly."
+                body="This is a test email from Myco-Monitor.\n\nIf you receive this, your email settings are configured correctly.",
             )
             return {"success": True, "message": "Test email sent successfully"}
         except Exception as e:
@@ -452,18 +461,18 @@ Log in to your dashboard to acknowledge or resolve this alert.
 
     def _is_quiet_hours(self, settings: Dict[str, Any]) -> bool:
         """Check if current time is within quiet hours."""
-        if not settings.get('quiet_hours_enabled'):
+        if not settings.get("quiet_hours_enabled"):
             return False
 
-        start = settings.get('quiet_hours_start')
-        end = settings.get('quiet_hours_end')
+        start = settings.get("quiet_hours_start")
+        end = settings.get("quiet_hours_end")
 
         if not start or not end:
             return False
 
         now = datetime.now().time()
-        start_time = datetime.strptime(start, '%H:%M').time()
-        end_time = datetime.strptime(end, '%H:%M').time()
+        start_time = datetime.strptime(start, "%H:%M").time()
+        end_time = datetime.strptime(end, "%H:%M").time()
 
         # Handle overnight quiet hours (e.g., 22:00 - 07:00)
         if start_time > end_time:
@@ -475,18 +484,22 @@ Log in to your dashboard to acknowledge or resolve this alert.
         """Encrypt a password for storage."""
         if self._encryption_key:
             from cryptography.fernet import Fernet
+
             cipher = Fernet(self._encryption_key)
             return cipher.encrypt(password.encode()).decode()
         # Fallback: Base64 encode (not secure, just obfuscation)
         import base64
+
         return base64.b64encode(password.encode()).decode()
 
     def _decrypt_password(self, encrypted: str) -> str:
         """Decrypt a stored password."""
         if self._encryption_key:
             from cryptography.fernet import Fernet
+
             cipher = Fernet(self._encryption_key)
             return cipher.decrypt(encrypted.encode()).decode()
         # Fallback: Base64 decode
         import base64
+
         return base64.b64decode(encrypted.encode()).decode()

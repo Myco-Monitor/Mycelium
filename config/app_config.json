@@ -11,6 +11,7 @@
     "backup_interval_hours": 24
   },
   "security": {
+    "secret_key": "your-secret-key-change-in-production",
     "session_timeout_minutes": 60
   },
   "tls": {

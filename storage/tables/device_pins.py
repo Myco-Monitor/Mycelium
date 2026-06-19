@@ -11,7 +11,12 @@ from typing import Optional, Dict, Any, List
 from pathlib import Path
 from cryptography.fernet import Fernet
 
-from storage.db_utils import execute_query, execute_insert, execute_update, get_timestamp
+from storage.db_utils import (
+    execute_query,
+    execute_insert,
+    execute_update,
+    get_timestamp,
+)
 
 
 # Key file location
@@ -67,7 +72,7 @@ def store_device_pin(device_id: int, device_type: str, pin: str) -> bool:
     Returns:
         bool: True if successful
     """
-    if device_type not in ('spore', 'hyphae'):
+    if device_type not in ("spore", "hyphae"):
         raise ValueError("device_type must be 'spore' or 'hyphae'")
 
     if not pin or len(pin) != 5 or not pin.isdigit():
@@ -82,7 +87,9 @@ def store_device_pin(device_id: int, device_type: str, pin: str) -> bool:
     SET encrypted_pin = ?, updated_at = ?
     WHERE device_id = ? AND device_type = ?
     """
-    rows_affected = execute_update(query, (encrypted_pin, get_timestamp(), device_id, device_type))
+    rows_affected = execute_update(
+        query, (encrypted_pin, get_timestamp(), device_id, device_type)
+    )
 
     if rows_affected == 0:
         # Insert new record
@@ -91,7 +98,9 @@ def store_device_pin(device_id: int, device_type: str, pin: str) -> bool:
         VALUES (?, ?, ?, ?, ?)
         """
         timestamp = get_timestamp()
-        execute_insert(query, (device_id, device_type, encrypted_pin, timestamp, timestamp))
+        execute_insert(
+            query, (device_id, device_type, encrypted_pin, timestamp, timestamp)
+        )
 
     return True
 
@@ -118,7 +127,7 @@ def get_device_pin(device_id: int, device_type: str) -> Optional[str]:
 
     try:
         cipher = _get_cipher()
-        encrypted_pin = results[0]['encrypted_pin']
+        encrypted_pin = results[0]["encrypted_pin"]
         return cipher.decrypt(encrypted_pin.encode()).decode()
     except Exception:
         # Decryption failed (possibly corrupted or key changed)
@@ -210,13 +219,15 @@ def rotate_encryption_key() -> int:
     devices = get_all_devices_with_pins()
 
     for device in devices:
-        pin = get_device_pin(device['device_id'], device['device_type'])
+        pin = get_device_pin(device["device_id"], device["device_type"])
         if pin:
-            pins_data.append({
-                'device_id': device['device_id'],
-                'device_type': device['device_type'],
-                'pin': pin
-            })
+            pins_data.append(
+                {
+                    "device_id": device["device_id"],
+                    "device_type": device["device_type"],
+                    "pin": pin,
+                }
+            )
 
     # Generate new key
     new_key = Fernet.generate_key()
@@ -226,9 +237,7 @@ def rotate_encryption_key() -> int:
     # Re-encrypt all PINs with new key
     for pin_data in pins_data:
         store_device_pin(
-            pin_data['device_id'],
-            pin_data['device_type'],
-            pin_data['pin']
+            pin_data["device_id"], pin_data["device_type"], pin_data["pin"]
         )
 
     return len(pins_data)

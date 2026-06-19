@@ -4,16 +4,34 @@ Firmware Versions table operations for Mycelium.
 Tracks firmware binary files uploaded for OTA updates.
 """
 
-from storage.db_utils import execute_query, execute_insert, execute_update, get_timestamp
+from storage.db_utils import (
+    execute_query,
+    execute_insert,
+    execute_update,
+    get_timestamp,
+)
 
 
-def create_firmware_version(device_type, version, file_path, file_hash, file_size, release_notes=None):
+def create_firmware_version(
+    device_type, version, file_path, file_hash, file_size, release_notes=None
+):
     """Create a new firmware version record."""
     query = """
     INSERT INTO firmware_versions (device_type, version, file_path, file_hash, file_size, release_notes, uploaded_at)
     VALUES (?, ?, ?, ?, ?, ?, ?)
     """
-    return execute_insert(query, (device_type, version, file_path, file_hash, file_size, release_notes, get_timestamp()))
+    return execute_insert(
+        query,
+        (
+            device_type,
+            version,
+            file_path,
+            file_hash,
+            file_size,
+            release_notes,
+            get_timestamp(),
+        ),
+    )
 
 
 def get_all_firmware_versions(device_type=None):

@@ -15,7 +15,7 @@ def log_notification(
     notification_method: str,
     recipient: str,
     status: str,
-    error_message: Optional[str] = None
+    error_message: Optional[str] = None,
 ) -> int:
     """
     Log a notification attempt.
@@ -33,11 +33,14 @@ def log_notification(
     conn = get_connection()
     cursor = conn.cursor()
 
-    cursor.execute("""
+    cursor.execute(
+        """
         INSERT INTO notification_log
         (alert_id, notification_method, recipient, status, error_message)
         VALUES (?, ?, ?, ?, ?)
-    """, (alert_id, notification_method, recipient, status, error_message))
+    """,
+        (alert_id, notification_method, recipient, status, error_message),
+    )
 
     conn.commit()
     log_id = cursor.lastrowid
@@ -59,11 +62,14 @@ def get_logs_for_alert(alert_id: int) -> List[Dict[str, Any]]:
     conn = get_connection()
     cursor = conn.cursor()
 
-    cursor.execute("""
+    cursor.execute(
+        """
         SELECT * FROM notification_log
         WHERE alert_id = ?
         ORDER BY sent_at DESC
-    """, (alert_id,))
+    """,
+        (alert_id,),
+    )
 
     columns = [description[0] for description in cursor.description]
     results = [dict(zip(columns, row)) for row in cursor.fetchall()]
@@ -87,12 +93,15 @@ def get_failed_notifications(hours: int = 24) -> List[Dict[str, Any]]:
     conn = get_connection()
     cursor = conn.cursor()
 
-    cursor.execute("""
+    cursor.execute(
+        """
         SELECT * FROM notification_log
         WHERE status = 'failed'
         AND sent_at >= ?
         ORDER BY sent_at DESC
-    """, (cutoff,))
+    """,
+        (cutoff,),
+    )
 
     columns = [description[0] for description in cursor.description]
     results = [dict(zip(columns, row)) for row in cursor.fetchall()]
@@ -116,23 +125,22 @@ def get_notification_stats(hours: int = 24) -> Dict[str, int]:
     conn = get_connection()
     cursor = conn.cursor()
 
-    cursor.execute("""
+    cursor.execute(
+        """
         SELECT
             COUNT(*) as total,
             SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END) as sent,
             SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed
         FROM notification_log
         WHERE sent_at >= ?
-    """, (cutoff,))
+    """,
+        (cutoff,),
+    )
 
     row = cursor.fetchone()
     conn.close()
 
-    return {
-        'total': row[0] or 0,
-        'sent': row[1] or 0,
-        'failed': row[2] or 0
-    }
+    return {"total": row[0] or 0, "sent": row[1] or 0, "failed": row[2] or 0}
 
 
 def cleanup_old_logs(days: int = 30) -> int:
@@ -150,10 +158,13 @@ def cleanup_old_logs(days: int = 30) -> int:
     conn = get_connection()
     cursor = conn.cursor()
 
-    cursor.execute("""
+    cursor.execute(
+        """
         DELETE FROM notification_log
         WHERE sent_at < ?
-    """, (cutoff,))
+    """,
+        (cutoff,),
+    )
 
     conn.commit()
     deleted_count = cursor.rowcount

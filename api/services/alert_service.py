@@ -20,6 +20,7 @@ logger = logging.getLogger("services.AlertService")
 @dataclass
 class AlertTrigger:
     """Represents a triggered alert."""
+
     rule_id: int
     rule_name: str
     rule_type: str
@@ -65,15 +66,15 @@ class AlertService:
         Returns:
             List of triggered alerts
         """
-        rule_type = rule.get('rule_type')
+        rule_type = rule.get("rule_type")
 
-        if rule_type == 'offline':
+        if rule_type == "offline":
             return self._check_offline_rule(rule)
-        elif rule_type in ('threshold_high', 'threshold_low'):
+        elif rule_type in ("threshold_high", "threshold_low"):
             return self._check_threshold_rule(rule)
-        elif rule_type == 'degraded':
+        elif rule_type == "degraded":
             return self._check_degraded_rule(rule)
-        elif rule_type == 'error':
+        elif rule_type == "error":
             return self._check_error_rule(rule)
 
         return []
@@ -81,42 +82,42 @@ class AlertService:
     def _check_offline_rule(self, rule: Dict[str, Any]) -> List[AlertTrigger]:
         """Check for offline devices."""
         triggers = []
-        duration_minutes = rule.get('threshold_duration_minutes', 5)
+        duration_minutes = rule.get("threshold_duration_minutes", 5)
         cutoff = datetime.now() - timedelta(minutes=duration_minutes)
         cutoff_str = cutoff.isoformat()
 
         devices = self._get_devices_for_rule(rule)
 
         for device in devices:
-            last_update = device.get('last_update')
-            is_online = device.get('is_online', 0)
+            last_update = device.get("last_update")
+            is_online = device.get("is_online", 0)
 
             # Check if device is offline or hasn't updated recently
             if not is_online or (last_update and last_update < cutoff_str):
                 # Check for duplicate
                 if not alert_history.check_duplicate_alert(
-                    rule['rule_id'],
-                    device['device_id'],
-                    minutes=60
+                    rule["rule_id"], device["device_id"], minutes=60
                 ):
                     # Create alert
                     message = f"{device['device_name']} offline for {duration_minutes}+ minutes"
-                    alert_id = alert_history.create_alert(
-                        rule_id=rule['rule_id'],
-                        device_id=device['device_id'],
-                        device_type=device['device_type'],
-                        alert_message=message
+                    alert_history.create_alert(
+                        rule_id=rule["rule_id"],
+                        device_id=device["device_id"],
+                        device_type=device["device_type"],
+                        alert_message=message,
                     )
 
-                    triggers.append(AlertTrigger(
-                        rule_id=rule['rule_id'],
-                        rule_name=rule['rule_name'],
-                        rule_type='offline',
-                        device_id=device['device_id'],
-                        device_type=device['device_type'],
-                        device_name=device['device_name'],
-                        message=message
-                    ))
+                    triggers.append(
+                        AlertTrigger(
+                            rule_id=rule["rule_id"],
+                            rule_name=rule["rule_name"],
+                            rule_type="offline",
+                            device_id=device["device_id"],
+                            device_type=device["device_type"],
+                            device_name=device["device_name"],
+                            message=message,
+                        )
+                    )
 
                     self.logger.info(f"Alert triggered: {message}")
 
@@ -125,19 +126,19 @@ class AlertService:
     def _check_threshold_rule(self, rule: Dict[str, Any]) -> List[AlertTrigger]:
         """Check sensor threshold rules."""
         triggers = []
-        metric = rule.get('metric')
-        threshold = rule.get('threshold_value')
-        is_high = rule['rule_type'] == 'threshold_high'
+        metric = rule.get("metric")
+        threshold = rule.get("threshold_value")
+        is_high = rule["rule_type"] == "threshold_high"
 
         if not metric or threshold is None:
             return triggers
 
         # Only applies to Spore devices (they have sensor data)
         devices = self._get_devices_for_rule(rule)
-        spore_devices = [d for d in devices if d.get('device_type') == 'spore']
+        spore_devices = [d for d in devices if d.get("device_type") == "spore"]
 
         for device in spore_devices:
-            reading = self._get_latest_reading(device['device_id'], metric)
+            reading = self._get_latest_reading(device["device_id"], metric)
             if reading is None:
                 continue
 
@@ -145,36 +146,38 @@ class AlertService:
 
             if triggered:
                 if not alert_history.check_duplicate_alert(
-                    rule['rule_id'],
-                    device['device_id'],
-                    minutes=30
+                    rule["rule_id"], device["device_id"], minutes=30
                 ):
                     direction = "above" if is_high else "below"
                     message = f"{metric.upper()} {direction} threshold on {device['device_name']}: {reading:.1f} (limit: {threshold})"
 
-                    alert_id = alert_history.create_alert(
-                        rule_id=rule['rule_id'],
-                        device_id=device['device_id'],
-                        device_type='spore',
+                    alert_history.create_alert(
+                        rule_id=rule["rule_id"],
+                        device_id=device["device_id"],
+                        device_type="spore",
                         alert_message=message,
-                        alert_value=reading
+                        alert_value=reading,
                     )
 
-                    triggers.append(AlertTrigger(
-                        rule_id=rule['rule_id'],
-                        rule_name=rule['rule_name'],
-                        rule_type=rule['rule_type'],
-                        device_id=device['device_id'],
-                        device_type='spore',
-                        device_name=device['device_name'],
-                        message=message,
-                        value=reading
-                    ))
+                    triggers.append(
+                        AlertTrigger(
+                            rule_id=rule["rule_id"],
+                            rule_name=rule["rule_name"],
+                            rule_type=rule["rule_type"],
+                            device_id=device["device_id"],
+                            device_type="spore",
+                            device_name=device["device_name"],
+                            message=message,
+                            value=reading,
+                        )
+                    )
 
                     self.logger.info(f"Alert triggered: {message}")
             else:
                 # Auto-resolve if condition cleared
-                alert_history.auto_resolve_for_rule_device(rule['rule_id'], device['device_id'])
+                alert_history.auto_resolve_for_rule_device(
+                    rule["rule_id"], device["device_id"]
+                )
 
         return triggers
 
@@ -187,36 +190,38 @@ class AlertService:
         from storage.tables.device_health import get_device_health_metrics
 
         for device in devices:
-            metrics = get_device_health_metrics(device['device_id'], device['device_type'])
-            avg_response = metrics.get('avg_response_24h')
+            metrics = get_device_health_metrics(
+                device["device_id"], device["device_type"]
+            )
+            avg_response = metrics.get("avg_response_24h")
 
             # Consider degraded if average response time > 2000ms
             if avg_response and avg_response > 2000:
                 if not alert_history.check_duplicate_alert(
-                    rule['rule_id'],
-                    device['device_id'],
-                    minutes=60
+                    rule["rule_id"], device["device_id"], minutes=60
                 ):
                     message = f"{device['device_name']} performance degraded (avg response: {avg_response:.0f}ms)"
 
-                    alert_id = alert_history.create_alert(
-                        rule_id=rule['rule_id'],
-                        device_id=device['device_id'],
-                        device_type=device['device_type'],
+                    alert_history.create_alert(
+                        rule_id=rule["rule_id"],
+                        device_id=device["device_id"],
+                        device_type=device["device_type"],
                         alert_message=message,
-                        alert_value=avg_response
+                        alert_value=avg_response,
                     )
 
-                    triggers.append(AlertTrigger(
-                        rule_id=rule['rule_id'],
-                        rule_name=rule['rule_name'],
-                        rule_type='degraded',
-                        device_id=device['device_id'],
-                        device_type=device['device_type'],
-                        device_name=device['device_name'],
-                        message=message,
-                        value=avg_response
-                    ))
+                    triggers.append(
+                        AlertTrigger(
+                            rule_id=rule["rule_id"],
+                            rule_name=rule["rule_name"],
+                            rule_type="degraded",
+                            device_id=device["device_id"],
+                            device_type=device["device_type"],
+                            device_name=device["device_name"],
+                            message=message,
+                            value=avg_response,
+                        )
+                    )
 
                     self.logger.info(f"Alert triggered: {message}")
 
@@ -241,32 +246,32 @@ class AlertService:
         devices = []
 
         # Get target device type(s)
-        rule_device_type = rule.get('device_type')
-        rule_device_id = rule.get('device_id')
-        rule_room_id = rule.get('room_id')
+        rule_device_type = rule.get("device_type")
+        rule_device_id = rule.get("device_id")
+        rule_room_id = rule.get("room_id")
 
         # Get Spore devices
-        if rule_device_type is None or rule_device_type == 'spore':
+        if rule_device_type is None or rule_device_type == "spore":
             spore_devices = device_spore.get_all_devices(active_only=True)
             for d in spore_devices:
                 # Apply filters
-                if rule_device_id and d['device_id'] != rule_device_id:
+                if rule_device_id and d["device_id"] != rule_device_id:
                     continue
-                if rule_room_id and d.get('room_id') != rule_room_id:
+                if rule_room_id and d.get("room_id") != rule_room_id:
                     continue
-                d['device_type'] = 'spore'
+                d["device_type"] = "spore"
                 devices.append(d)
 
         # Get Hyphae devices
-        if rule_device_type is None or rule_device_type == 'hyphae':
+        if rule_device_type is None or rule_device_type == "hyphae":
             hyphae_devices = device_hyphae.get_all_devices(active_only=True)
             for d in hyphae_devices:
                 # Apply filters
-                if rule_device_id and d['device_id'] != rule_device_id:
+                if rule_device_id and d["device_id"] != rule_device_id:
                     continue
-                if rule_room_id and d.get('room_id') != rule_room_id:
+                if rule_room_id and d.get("room_id") != rule_room_id:
                     continue
-                d['device_type'] = 'hyphae'
+                d["device_type"] = "hyphae"
                 devices.append(d)
 
         return devices
@@ -286,11 +291,7 @@ class AlertService:
         if not latest:
             return None
 
-        metric_map = {
-            'co2': 'co2',
-            'temperature': 'temp',
-            'humidity': 'humidity'
-        }
+        metric_map = {"co2": "co2", "temperature": "temp", "humidity": "humidity"}
 
         field = metric_map.get(metric)
         if field:
@@ -312,7 +313,9 @@ class AlertService:
         """Get alert history for the past N days."""
         return alert_history.get_alert_history(days=days)
 
-    def acknowledge_alert(self, alert_id: int, user_id: int, notes: Optional[str] = None) -> bool:
+    def acknowledge_alert(
+        self, alert_id: int, user_id: int, notes: Optional[str] = None
+    ) -> bool:
         """Acknowledge an alert."""
         return alert_history.acknowledge_alert(alert_id, user_id, notes)
 
@@ -344,8 +347,8 @@ class AlertService:
         metric: Optional[str] = None,
         threshold_value: Optional[float] = None,
         threshold_duration_minutes: int = 5,
-        notification_method: str = 'ui',
-        notification_target: Optional[str] = None
+        notification_method: str = "ui",
+        notification_target: Optional[str] = None,
     ) -> int:
         """Create a new alert rule."""
         return alert_rules.create_rule(
@@ -358,7 +361,7 @@ class AlertService:
             threshold_value=threshold_value,
             threshold_duration_minutes=threshold_duration_minutes,
             notification_method=notification_method,
-            notification_target=notification_target
+            notification_target=notification_target,
         )
 
     def update_rule(self, rule_id: int, **kwargs) -> bool:

@@ -16,6 +16,7 @@ from api.clients.base_client import create_device_ssl_context
 @dataclass
 class CalibrationStatus:
     """Current calibration status of a Spore device."""
+
     warmup_state: str
     co2_std_dev: Optional[float] = None
     allow_remote_calibration: bool = False
@@ -27,6 +28,7 @@ class CalibrationStatus:
 @dataclass
 class CalibrationResult:
     """Result of a calibration attempt."""
+
     success: bool
     accepted: bool = False
     warmup_seconds: int = 0
@@ -55,7 +57,9 @@ class CalibrationService:
         self.timeout = timeout
         self.logger = logging.getLogger("services.CalibrationService")
 
-    async def get_calibration_status(self, spore_ip: str) -> Optional[CalibrationStatus]:
+    async def get_calibration_status(
+        self, spore_ip: str
+    ) -> Optional[CalibrationStatus]:
         """
         Get the current calibration status from a Spore device.
 
@@ -71,7 +75,9 @@ class CalibrationService:
             timeout = aiohttp.ClientTimeout(total=self.timeout)
             ssl_ctx = create_device_ssl_context()
             connector = aiohttp.TCPConnector(ssl=ssl_ctx)
-            async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
+            async with aiohttp.ClientSession(
+                timeout=timeout, connector=connector
+            ) as session:
                 async with session.get(f"https://{spore_ip}/api/status") as response:
                     if response.status == 200:
                         data = await response.json()
@@ -82,18 +88,18 @@ class CalibrationService:
 
                         # Determine if calibration is possible
                         can_calibrate = (
-                            allow_remote and
-                            warmup_state == "ready" and
-                            cooldown == 0
+                            allow_remote and warmup_state == "ready" and cooldown == 0
                         )
 
                         return CalibrationStatus(
                             warmup_state=warmup_state,
                             co2_std_dev=data.get("co2_std_dev"),
                             allow_remote_calibration=allow_remote,
-                            last_calibration_timestamp=data.get("last_calibration_timestamp"),
+                            last_calibration_timestamp=data.get(
+                                "last_calibration_timestamp"
+                            ),
                             calibration_cooldown_remaining=cooldown,
-                            can_calibrate=can_calibrate
+                            can_calibrate=can_calibrate,
                         )
         except Exception as e:
             self.logger.error(f"Error getting calibration status from {spore_ip}: {e}")
@@ -101,10 +107,7 @@ class CalibrationService:
         return None
 
     async def trigger_calibration(
-        self,
-        spore_ip: str,
-        pin: str,
-        target_ppm: int = 420
+        self, spore_ip: str, pin: str, target_ppm: int = 420
     ) -> CalibrationResult:
         """
         Trigger CO2 sensor calibration on a Spore device.
@@ -120,8 +123,7 @@ class CalibrationService:
         # Validate target PPM
         if not 350 <= target_ppm <= 500:
             return CalibrationResult(
-                success=False,
-                error="Target PPM must be between 350 and 500"
+                success=False, error="Target PPM must be between 350 and 500"
             )
 
         # Check if calibration is allowed first
@@ -129,50 +131,47 @@ class CalibrationService:
         if status:
             if not status.allow_remote_calibration:
                 return CalibrationResult(
-                    success=False,
-                    error="Remote calibration is disabled on this device"
+                    success=False, error="Remote calibration is disabled on this device"
                 )
             if status.warmup_state != "ready":
                 return CalibrationResult(
                     success=False,
-                    error=f"Sensor not ready (warmup state: {status.warmup_state})"
+                    error=f"Sensor not ready (warmup state: {status.warmup_state})",
                 )
             if status.calibration_cooldown_remaining > 0:
                 return CalibrationResult(
                     success=False,
-                    error=f"Calibration on cooldown ({status.calibration_cooldown_remaining}s remaining)"
+                    error=f"Calibration on cooldown ({status.calibration_cooldown_remaining}s remaining)",
                 )
 
         auth = DeviceAuthHandler(spore_ip, pin, timeout=self.timeout)
         payload = {"target_ppm": target_ppm}
 
         result = await auth.make_authenticated_request(
-            "POST",
-            "/api/calibrate",
-            json_data=payload
+            "POST", "/api/calibrate", json_data=payload
         )
 
         if result.get("success"):
             data = result.get("data", {})
-            self.logger.info(f"Calibration triggered on {spore_ip} with target {target_ppm} ppm")
+            self.logger.info(
+                f"Calibration triggered on {spore_ip} with target {target_ppm} ppm"
+            )
             return CalibrationResult(
                 success=True,
                 accepted=data.get("accepted", True),
                 warmup_seconds=data.get("warmup_seconds", 120),
-                previous_reading=data.get("previous_reading")
+                previous_reading=data.get("previous_reading"),
             )
         else:
-            self.logger.warning(f"Calibration failed on {spore_ip}: {result.get('error')}")
+            self.logger.warning(
+                f"Calibration failed on {spore_ip}: {result.get('error')}"
+            )
             return CalibrationResult(
-                success=False,
-                error=result.get("error", "Unknown error")
+                success=False, error=result.get("error", "Unknown error")
             )
 
     async def update_ambient_pressure(
-        self,
-        spore_ip: str,
-        pin: str,
-        pressure_hpa: int
+        self, spore_ip: str, pin: str, pressure_hpa: int
     ) -> Dict[str, Any]:
         """
         Update the ambient pressure on a Spore device for CO2 compensation.
@@ -192,30 +191,28 @@ class CalibrationService:
         if not 300 <= pressure_hpa <= 1100:
             return {
                 "success": False,
-                "error": "Pressure must be between 300 and 1100 hPa"
+                "error": "Pressure must be between 300 and 1100 hPa",
             }
 
         auth = DeviceAuthHandler(spore_ip, pin, timeout=self.timeout)
 
         # Spore expects plain text body for pressure
         result = await auth.make_authenticated_request(
-            "POST",
-            "/api/ambient-pressure",
-            data=str(pressure_hpa)
+            "POST", "/api/ambient-pressure", data=str(pressure_hpa)
         )
 
         if result.get("success"):
-            self.logger.info(f"Ambient pressure updated to {pressure_hpa} hPa on {spore_ip}")
+            self.logger.info(
+                f"Ambient pressure updated to {pressure_hpa} hPa on {spore_ip}"
+            )
         else:
-            self.logger.warning(f"Failed to update pressure on {spore_ip}: {result.get('error')}")
+            self.logger.warning(
+                f"Failed to update pressure on {spore_ip}: {result.get('error')}"
+            )
 
         return result
 
-    async def clear_diagnostics(
-        self,
-        spore_ip: str,
-        pin: str
-    ) -> Dict[str, Any]:
+    async def clear_diagnostics(self, spore_ip: str, pin: str) -> Dict[str, Any]:
         """
         Clear the diagnostic/error log on a Spore device.
 
@@ -228,15 +225,14 @@ class CalibrationService:
         """
         auth = DeviceAuthHandler(spore_ip, pin, timeout=self.timeout)
 
-        result = await auth.make_authenticated_request(
-            "POST",
-            "/api/diagnostics/clear"
-        )
+        result = await auth.make_authenticated_request("POST", "/api/diagnostics/clear")
 
         if result.get("success"):
             self.logger.info(f"Diagnostics cleared on {spore_ip}")
         else:
-            self.logger.warning(f"Failed to clear diagnostics on {spore_ip}: {result.get('error')}")
+            self.logger.warning(
+                f"Failed to clear diagnostics on {spore_ip}: {result.get('error')}"
+            )
 
         return result
 
@@ -256,7 +252,9 @@ class CalibrationService:
             timeout = aiohttp.ClientTimeout(total=self.timeout)
             ssl_ctx = create_device_ssl_context()
             connector = aiohttp.TCPConnector(ssl=ssl_ctx)
-            async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
+            async with aiohttp.ClientSession(
+                timeout=timeout, connector=connector
+            ) as session:
                 async with session.get(f"https://{spore_ip}/api/status") as response:
                     if response.status == 200:
                         data = await response.json()
@@ -269,9 +267,15 @@ class CalibrationService:
                             "measurement_interval": data.get("measurement_interval"),
                             "temp_preference": data.get("temp_preference"),
                             "default_pressure": data.get("default_pressure"),
-                            "allow_remote_calibration": data.get("allow_remote_calibration"),
-                            "calibration_cooldown_period": data.get("calibration_cooldown_period"),
-                            "last_calibration_timestamp": data.get("last_calibration_timestamp"),
+                            "allow_remote_calibration": data.get(
+                                "allow_remote_calibration"
+                            ),
+                            "calibration_cooldown_period": data.get(
+                                "calibration_cooldown_period"
+                            ),
+                            "last_calibration_timestamp": data.get(
+                                "last_calibration_timestamp"
+                            ),
                         }
         except Exception as e:
             self.logger.error(f"Error getting sensor info from {spore_ip}: {e}")

@@ -13,7 +13,10 @@ def create_ota_event(device_id, device_type, firmware_name, status, error_messag
     INSERT INTO ota_history (device_id, device_type, firmware_name, status, error_message, started_at)
     VALUES (?, ?, ?, ?, ?, ?)
     """
-    return execute_insert(query, (device_id, device_type, firmware_name, status, error_message, get_timestamp()))
+    return execute_insert(
+        query,
+        (device_id, device_type, firmware_name, status, error_message, get_timestamp()),
+    )
 
 
 def get_ota_history(device_id=None, device_type=None, limit=50):

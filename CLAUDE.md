@@ -91,10 +91,11 @@ python run.py --dev
 
 # Custom host/port
 python run.py --host 0.0.0.0 --port 8080
-
-# Sentinel mode (simulated devices)
-python run.py --sentinel --dev
 ```
+
+Device simulation is handled by the external **RoboSims** project (run separately);
+Mycelium has no built-in simulation mode. Point Mycelium at simulated devices by
+adding them through the UI using their `host:port` address.
 
 ## Architecture
 

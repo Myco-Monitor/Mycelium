@@ -13,12 +13,13 @@ import logging
 from typing import Dict, List, Any, Optional
 from dataclasses import dataclass
 
-from api.clients.base_client import BaseApiClient, ApiError, ApiErrorType
+from api.clients.base_client import BaseApiClient, ApiError
 
 
 @dataclass
 class PressureReading:
     """Data class for pressure readings from Hyphae BMP581 sensor."""
+
     pressure_hpa: int
     source: str
     healthy: bool
@@ -30,7 +31,7 @@ class PressureReading:
             "pressure_hpa": self.pressure_hpa,
             "source": self.source,
             "healthy": self.healthy,
-            "timestamp": self.timestamp
+            "timestamp": self.timestamp,
         }
 
 
@@ -101,10 +102,10 @@ class PressureClient(BaseApiClient):
         try:
             data = await self.get("/api/pressure")
             return PressureReading(
-                pressure_hpa=data.get('pressure_hpa', 0),
-                source=data.get('source', 'BMP581'),
-                healthy=data.get('healthy', False),
-                timestamp=data.get('timestamp', 0)
+                pressure_hpa=data.get("pressure_hpa", 0),
+                source=data.get("source", "BMP581"),
+                healthy=data.get("healthy", False),
+                timestamp=data.get("timestamp", 0),
             )
         except ApiError as e:
             self.logger.error(f"Failed to get current pressure: {e}")
@@ -123,13 +124,15 @@ class PressureClient(BaseApiClient):
         try:
             data = await self.get("/api/pressure/history")
             readings = []
-            for r in data.get('readings', []):
-                readings.append(PressureReading(
-                    pressure_hpa=r.get('pressure_hpa', 0),
-                    source='BMP581',
-                    healthy=True,
-                    timestamp=r.get('timestamp', 0)
-                ))
+            for r in data.get("readings", []):
+                readings.append(
+                    PressureReading(
+                        pressure_hpa=r.get("pressure_hpa", 0),
+                        source="BMP581",
+                        healthy=True,
+                        timestamp=r.get("timestamp", 0),
+                    )
+                )
             return readings
         except ApiError as e:
             self.logger.error(f"Failed to get pressure history: {e}")

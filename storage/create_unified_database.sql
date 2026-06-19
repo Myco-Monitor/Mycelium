@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS device_hyphae (
     device_id INTEGER PRIMARY KEY AUTOINCREMENT,
     device_name TEXT NOT NULL,
     room_id INTEGER NOT NULL,
-    ip_address TEXT NOT NULL,
+    hostname TEXT NOT NULL,
     mac_address TEXT UNIQUE NOT NULL,
     mode_enabled INTEGER NOT NULL DEFAULT 0,
     mode_operation INTEGER NOT NULL DEFAULT 0,
@@ -62,11 +62,17 @@ CREATE TABLE IF NOT EXISTS device_spore (
     device_name TEXT NOT NULL,
     room_id INTEGER NOT NULL,
     hyphae_id INTEGER,
-    ip_address TEXT NOT NULL,
+    hostname TEXT NOT NULL,
     mac_address TEXT UNIQUE NOT NULL,
     hyphae_present INTEGER DEFAULT 0,
     firmware_version TEXT,
     is_online INTEGER DEFAULT 0,
+    -- When 1 (and no Hyphae is linked), Mycelium pushes OpenWeatherMap-derived
+    -- ambient pressure to this Spore for CO2 compensation. altitude_m (meters)
+    -- lets Mycelium approximate local station pressure from sea-level pressure
+    -- when OWM does not supply grnd_level.
+    weather_pressure_enabled INTEGER DEFAULT 0,
+    altitude_m REAL,
     last_update TEXT,
     active INTEGER DEFAULT 1,
     deactivation_reason TEXT,
@@ -142,6 +148,56 @@ CREATE TABLE IF NOT EXISTS readings_pressure (
 CREATE INDEX IF NOT EXISTS idx_readings_pressure_hyphae_id ON readings_pressure(hyphae_id);
 CREATE INDEX IF NOT EXISTS idx_readings_pressure_timestamp ON readings_pressure(reading_ts);
 CREATE INDEX IF NOT EXISTS idx_readings_pressure_device_time ON readings_pressure(hyphae_id, reading_ts DESC);
+
+-- Fleet Management Tables
+
+-- Firmware version inventory
+CREATE TABLE IF NOT EXISTS firmware_versions (
+    version_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    device_type TEXT NOT NULL CHECK(device_type IN ('spore', 'hyphae')),
+    version TEXT NOT NULL,
+    file_path TEXT NOT NULL,
+    file_hash TEXT NOT NULL,
+    file_size INTEGER NOT NULL,
+    release_notes TEXT,
+    uploaded_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_fw_device_type ON firmware_versions(device_type);
+CREATE INDEX IF NOT EXISTS idx_fw_uploaded ON firmware_versions(uploaded_at);
+
+-- OTA update event log
+CREATE TABLE IF NOT EXISTS ota_history (
+    ota_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    device_id INTEGER NOT NULL,
+    device_type TEXT NOT NULL CHECK(device_type IN ('spore', 'hyphae')),
+    firmware_name TEXT,
+    status TEXT NOT NULL CHECK(status IN ('pending', 'uploading', 'success', 'failed')),
+    error_message TEXT,
+    started_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    completed_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_ota_device ON ota_history(device_id, device_type);
+CREATE INDEX IF NOT EXISTS idx_ota_status ON ota_history(status);
+CREATE INDEX IF NOT EXISTS idx_ota_started ON ota_history(started_at);
+
+-- Calibration event log
+CREATE TABLE IF NOT EXISTS calibration_history (
+    cal_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    device_id INTEGER NOT NULL,
+    cal_type TEXT NOT NULL CHECK(cal_type IN ('remote', 'manual')),
+    target_ppm INTEGER,
+    status TEXT NOT NULL CHECK(status IN ('scheduled', 'in_progress', 'completed', 'failed')),
+    scheduled_at TEXT,
+    started_at TEXT,
+    completed_at TEXT,
+    notes TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_cal_device ON calibration_history(device_id);
+CREATE INDEX IF NOT EXISTS idx_cal_status ON calibration_history(status);
+CREATE INDEX IF NOT EXISTS idx_cal_started ON calibration_history(started_at);
 
 -- Configuration Tables
 

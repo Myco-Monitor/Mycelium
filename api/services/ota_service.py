@@ -26,12 +26,12 @@ class OtaService:
 
     def __init__(self):
         self.logger = logging.getLogger("api.OtaService")
-        self.firmware_dir = Path(__file__).parent.parent.parent / 'data' / 'firmware'
+        self.firmware_dir = Path(__file__).parent.parent.parent / "data" / "firmware"
         self.firmware_dir.mkdir(parents=True, exist_ok=True)
 
     def _get_device_url(self, device_id: int, device_type: str) -> Optional[str]:
         """Get the base URL for a device."""
-        if device_type == 'spore':
+        if device_type == "spore":
             device = get_device_spore(device_id)
         else:
             device = get_device_hyphae(device_id)
@@ -39,13 +39,15 @@ class OtaService:
         if not device:
             return None
 
-        ip = device.get('ip_address')
+        ip = device.get("hostname")
         if not ip:
             return None
 
         return f"https://{ip}"
 
-    def resolve_pin(self, device_id: int, device_type: str, user_id: int = None) -> Optional[str]:
+    def resolve_pin(
+        self, device_id: int, device_type: str, user_id: int = None
+    ) -> Optional[str]:
         """
         Two-tier PIN lookup:
         1. Per-device PIN from device_pins table (highest priority)
@@ -62,15 +64,18 @@ class OtaService:
         if user_id:
             try:
                 from storage.tables.user_settings import get_user_setting
+
                 user_info = get_user_setting(user_id)
-                if user_info and user_info.get('reset_pin'):
-                    return user_info['reset_pin']
+                if user_info and user_info.get("reset_pin"):
+                    return user_info["reset_pin"]
             except Exception:
                 pass
 
         return None
 
-    def get_pin_status(self, device_id: int, device_type: str, user_id: int = None) -> str:
+    def get_pin_status(
+        self, device_id: int, device_type: str, user_id: int = None
+    ) -> str:
         """
         Return the PIN status for a device:
         'device' — per-device PIN stored
@@ -78,16 +83,17 @@ class OtaService:
         'missing' — no PIN available
         """
         if has_stored_pin(device_id, device_type):
-            return 'device'
+            return "device"
         if user_id:
             try:
                 from storage.tables.user_settings import get_user_setting
+
                 user_info = get_user_setting(user_id)
-                if user_info and user_info.get('reset_pin'):
-                    return 'default'
+                if user_info and user_info.get("reset_pin"):
+                    return "default"
             except Exception:
                 pass
-        return 'missing'
+        return "missing"
 
     async def upload_firmware(
         self,
@@ -112,19 +118,25 @@ class OtaService:
         """
         base_url = self._get_device_url(device_id, device_type)
         if not base_url:
-            return {'success': False, 'error': 'Device not found or has no IP'}
+            return {"success": False, "error": "Device not found or has no IP"}
 
         pin = self.resolve_pin(device_id, device_type, user_id)
         firmware = Path(firmware_path)
         if not firmware.exists():
-            return {'success': False, 'error': f'Firmware file not found: {firmware_path}'}
+            return {
+                "success": False,
+                "error": f"Firmware file not found: {firmware_path}",
+            }
 
         file_size = firmware.stat().st_size
-        self.logger.info(f"Starting OTA upload to {device_type} {device_id}: {firmware.name} ({file_size} bytes)")
+        self.logger.info(
+            f"Starting OTA upload to {device_type} {device_id}: {firmware.name} ({file_size} bytes)"
+        )
 
         # Create SSL context for device communication
         from api.clients.base_client import _CA_CERT_PATH
         import ssl
+
         ssl_ctx = ssl.create_default_context()
         ca_path = Path(_CA_CERT_PATH)
         if ca_path.exists():
@@ -139,9 +151,9 @@ class OtaService:
             async with aiohttp.ClientSession(connector=connector) as session:
                 # Phase 1: Start upload
                 if on_progress:
-                    on_progress(0, 'Starting upload...')
+                    on_progress(0, "Starting upload...")
 
-                start_data = {'pin': pin} if pin else {}
+                start_data = {"pin": pin} if pin else {}
                 async with session.post(
                     f"{base_url}/api/ota/start-upload",
                     json=start_data,
@@ -149,47 +161,60 @@ class OtaService:
                 ) as resp:
                     if resp.status != 200:
                         body = await resp.text()
-                        return {'success': False, 'error': f'Start upload failed ({resp.status}): {body}'}
+                        return {
+                            "success": False,
+                            "error": f"Start upload failed ({resp.status}): {body}",
+                        }
                     result = await resp.json()
-                    token = result.get('token') or result.get('upload_token')
+                    token = result.get("token") or result.get("upload_token")
                     if not token:
-                        return {'success': False, 'error': 'No upload token returned'}
+                        return {"success": False, "error": "No upload token returned"}
 
                 # Phase 2: Stream firmware
                 if on_progress:
-                    on_progress(10, 'Uploading firmware...')
+                    on_progress(10, "Uploading firmware...")
 
-                with open(firmware, 'rb') as f:
+                with open(firmware, "rb") as f:
                     async with session.post(
                         f"{base_url}/api/ota/upload-stream",
                         data=f,
                         headers={
-                            'X-OTA-Token': token,
-                            'Content-Type': 'application/octet-stream',
-                            'Content-Length': str(file_size),
+                            "X-OTA-Token": token,
+                            "Content-Type": "application/octet-stream",
+                            "Content-Length": str(file_size),
                         },
                         timeout=aiohttp.ClientTimeout(total=120),
                     ) as resp:
                         if resp.status != 200:
                             body = await resp.text()
-                            return {'success': False, 'error': f'Upload failed ({resp.status}): {body}'}
+                            return {
+                                "success": False,
+                                "error": f"Upload failed ({resp.status}): {body}",
+                            }
 
                 if on_progress:
-                    on_progress(90, 'Firmware uploaded, device rebooting...')
+                    on_progress(90, "Firmware uploaded, device rebooting...")
 
                 # Log to OTA history
-                self._log_ota_event(device_id, device_type, firmware.name, 'success')
+                self._log_ota_event(device_id, device_type, firmware.name, "success")
 
-                return {'success': True, 'message': f'Firmware uploaded successfully to {device_type} {device_id}'}
+                return {
+                    "success": True,
+                    "message": f"Firmware uploaded successfully to {device_type} {device_id}",
+                }
 
         except asyncio.TimeoutError:
-            self._log_ota_event(device_id, device_type, firmware.name, 'failed', 'Upload timed out')
-            return {'success': False, 'error': 'Upload timed out'}
+            self._log_ota_event(
+                device_id, device_type, firmware.name, "failed", "Upload timed out"
+            )
+            return {"success": False, "error": "Upload timed out"}
         except Exception as e:
-            self._log_ota_event(device_id, device_type, firmware.name, 'failed', str(e))
-            return {'success': False, 'error': str(e)}
+            self._log_ota_event(device_id, device_type, firmware.name, "failed", str(e))
+            return {"success": False, "error": str(e)}
 
-    async def get_device_ota_status(self, device_id: int, device_type: str) -> Optional[Dict]:
+    async def get_device_ota_status(
+        self, device_id: int, device_type: str
+    ) -> Optional[Dict]:
         """Poll a device's OTA status endpoint."""
         base_url = self._get_device_url(device_id, device_type)
         if not base_url:
@@ -197,6 +222,7 @@ class OtaService:
 
         from api.clients.base_client import _CA_CERT_PATH
         import ssl
+
         ssl_ctx = ssl.create_default_context()
         ca_path = Path(_CA_CERT_PATH)
         if ca_path.exists():
@@ -218,10 +244,18 @@ class OtaService:
             pass
         return None
 
-    def _log_ota_event(self, device_id: int, device_type: str, firmware_name: str, status: str, error: str = None):
+    def _log_ota_event(
+        self,
+        device_id: int,
+        device_type: str,
+        firmware_name: str,
+        status: str,
+        error: str = None,
+    ):
         """Log an OTA event to the database."""
         try:
             from storage.tables.ota_history import create_ota_event
+
             create_ota_event(device_id, device_type, firmware_name, status, error)
         except Exception as e:
             self.logger.error(f"Failed to log OTA event: {e}")

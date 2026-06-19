@@ -7,11 +7,16 @@ in the Mycelium database. Stores BMP581 pressure readings from Hyphae devices.
 
 from typing import Dict, List, Optional, Tuple, Any
 
-from storage.db_utils import execute_query, execute_insert, execute_update, get_timestamp
+from storage.db_utils import execute_query, execute_insert, execute_update
 
 
-def create_reading(hyphae_id: int, reading_ts: str, pressure_hpa: int,
-                   source: str = "BMP581", healthy: int = 1) -> Tuple[int, str]:
+def create_reading(
+    hyphae_id: int,
+    reading_ts: str,
+    pressure_hpa: int,
+    source: str = "BMP581",
+    healthy: int = 1,
+) -> Tuple[int, str]:
     """
     Create a new pressure reading record.
 
@@ -49,9 +54,12 @@ def get_reading(hyphae_id: int, reading_ts: str) -> Optional[Dict[str, Any]]:
     return results[0] if results else None
 
 
-def get_device_readings(hyphae_id: int, limit: int = 100,
-                        start_ts: Optional[str] = None,
-                        end_ts: Optional[str] = None) -> List[Dict[str, Any]]:
+def get_device_readings(
+    hyphae_id: int,
+    limit: int = 100,
+    start_ts: Optional[str] = None,
+    end_ts: Optional[str] = None,
+) -> List[Dict[str, Any]]:
     """
     Get pressure readings for a specific Hyphae device with optional time range filtering.
 
@@ -101,8 +109,13 @@ def get_latest_pressure(hyphae_id: int) -> Optional[Dict[str, Any]]:
     return results[0] if results else None
 
 
-def update_reading(hyphae_id: int, reading_ts: str, pressure_hpa: Optional[int] = None,
-                   source: Optional[str] = None, healthy: Optional[int] = None) -> int:
+def update_reading(
+    hyphae_id: int,
+    reading_ts: str,
+    pressure_hpa: Optional[int] = None,
+    source: Optional[str] = None,
+    healthy: Optional[int] = None,
+) -> int:
     """
     Update a pressure reading record.
 
@@ -139,7 +152,7 @@ def update_reading(hyphae_id: int, reading_ts: str, pressure_hpa: Optional[int] 
 
     query = f"""
     UPDATE readings_pressure
-    SET {', '.join(update_fields)}
+    SET {", ".join(update_fields)}
     WHERE hyphae_id = ? AND reading_ts = ?
     """
 
@@ -161,9 +174,9 @@ def delete_reading(hyphae_id: int, reading_ts: str) -> int:
     return execute_update(query, (hyphae_id, reading_ts))
 
 
-def delete_device_readings(hyphae_id: int,
-                           start_ts: Optional[str] = None,
-                           end_ts: Optional[str] = None) -> int:
+def delete_device_readings(
+    hyphae_id: int, start_ts: Optional[str] = None, end_ts: Optional[str] = None
+) -> int:
     """
     Delete multiple pressure readings for a specific Hyphae device.
 

@@ -8,7 +8,6 @@ This module provides services for handling BMP581 pressure data from Hyphae devi
 - Duplicate detection
 """
 
-import os
 import logging
 from typing import Dict, List, Any, Optional
 from datetime import datetime
@@ -18,7 +17,7 @@ from storage.tables.device_hyphae import update_device_status, get_device_hyphae
 from storage.tables.readings_pressure import (
     create_reading,
     get_latest_pressure,
-    get_device_readings
+    get_device_readings,
 )
 
 
@@ -42,26 +41,6 @@ class PressureDataService:
         """Initialize the Pressure data service."""
         self.logger = logging.getLogger("api.PressureDataService")
         self.clients: Dict[int, PressureClient] = {}
-        self._sentinel_mode = os.environ.get('MYCELIUM_SENTINEL_MODE') == '1'
-
-        if self._sentinel_mode:
-            self.logger.info("Pressure service running in Sentinel mode")
-
-    def _get_device_url(self, device: Dict[str, Any]) -> str:
-        """
-        Get the base URL for a device, respecting Sentinel mode.
-
-        Args:
-            device: Device record from database
-
-        Returns:
-            str: Base URL for the device
-        """
-        if self._sentinel_mode:
-            # In Sentinel mode, use localhost with configured port
-            # Default to port 8001 for first Hyphae device
-            return "http://localhost:8001"
-        return f"https://{device['ip_address']}"
 
     async def initialize_client(self, device_id: int) -> PressureClient:
         """
@@ -81,11 +60,11 @@ class PressureDataService:
             raise ValueError(f"Hyphae device with ID {device_id} not found")
 
         if device_id not in self.clients:
-            base_url = self._get_device_url(device)
+            base_url = f"https://{device['hostname']}"
             client = PressureClient(
                 base_url=base_url,
-                device_name=device['device_name'],
-                device_id=device_id
+                device_name=device["device_name"],
+                device_id=device_id,
             )
             self.clients[device_id] = client
             self.logger.info(
@@ -127,11 +106,15 @@ class PressureDataService:
             update_device_status(device_id, 1 if is_connected else 0)
             return is_connected
         except Exception as e:
-            self.logger.error(f"Error checking pressure connection for device {device_id}: {e}")
+            self.logger.error(
+                f"Error checking pressure connection for device {device_id}: {e}"
+            )
             update_device_status(device_id, 0)
             return False
 
-    async def fetch_and_store_pressure(self, device_id: int) -> Optional[Dict[str, Any]]:
+    async def fetch_and_store_pressure(
+        self, device_id: int
+    ) -> Optional[Dict[str, Any]]:
         """
         Fetch current pressure from a Hyphae device and store it.
 
@@ -168,7 +151,9 @@ class PressureDataService:
         """
         return get_latest_pressure(device_id)
 
-    async def get_pressure_history(self, device_id: int, limit: int = 100) -> List[Dict[str, Any]]:
+    async def get_pressure_history(
+        self, device_id: int, limit: int = 100
+    ) -> List[Dict[str, Any]]:
         """
         Get pressure history for a device from the database.
 
@@ -182,9 +167,7 @@ class PressureDataService:
         return get_device_readings(device_id, limit=limit)
 
     async def store_reading(
-        self,
-        device_id: int,
-        reading: PressureReading
+        self, device_id: int, reading: PressureReading
     ) -> Optional[Dict[str, Any]]:
         """
         Transform and store a pressure reading in the database.
@@ -198,7 +181,9 @@ class PressureDataService:
         """
         try:
             if not self._validate_reading(reading):
-                self.logger.warning(f"Invalid pressure reading for device {device_id}: {reading}")
+                self.logger.warning(
+                    f"Invalid pressure reading for device {device_id}: {reading}"
+                )
                 return None
 
             transformed = self._transform_reading(device_id, reading)
@@ -212,7 +197,7 @@ class PressureDataService:
                 reading_ts=transformed["reading_ts"],
                 pressure_hpa=transformed["pressure_hpa"],
                 source=transformed["source"],
-                healthy=transformed["healthy"]
+                healthy=transformed["healthy"],
             )
 
             self.logger.debug(
@@ -222,7 +207,9 @@ class PressureDataService:
             return transformed
 
         except Exception as e:
-            self.logger.error(f"Error storing pressure reading for device {device_id}: {e}")
+            self.logger.error(
+                f"Error storing pressure reading for device {device_id}: {e}"
+            )
             return None
 
     def _validate_reading(self, reading: PressureReading) -> bool:
@@ -244,9 +231,7 @@ class PressureDataService:
         return True
 
     def _transform_reading(
-        self,
-        device_id: int,
-        reading: PressureReading
+        self, device_id: int, reading: PressureReading
     ) -> Dict[str, Any]:
         """
         Transform a pressure reading for storage.
@@ -268,7 +253,7 @@ class PressureDataService:
             "reading_ts": timestamp.isoformat(),
             "pressure_hpa": reading.pressure_hpa,
             "source": reading.source,
-            "healthy": 1 if reading.healthy else 0
+            "healthy": 1 if reading.healthy else 0,
         }
 
     def _is_duplicate(self, device_id: int, reading: Dict[str, Any]) -> bool:

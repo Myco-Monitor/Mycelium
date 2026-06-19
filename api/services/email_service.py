@@ -35,21 +35,22 @@ class EmailService:
         """
         try:
             from storage.tables.user_settings import get_user_setting
+
             settings = get_user_setting(user_id)
             if not settings:
                 return None
 
-            server = settings.get('smtp_server')
+            server = settings.get("smtp_server")
             if not server:
                 return None
 
             return {
-                'server': server,
-                'port': int(settings.get('smtp_port', 587)),
-                'from_addr': settings.get('smtp_from', ''),
-                'to_addr': settings.get('smtp_to', ''),
-                'password': settings.get('smtp_password', ''),
-                'use_tls': bool(settings.get('smtp_use_tls', True)),
+                "server": server,
+                "port": int(settings.get("smtp_port", 587)),
+                "from_addr": settings.get("smtp_from", ""),
+                "to_addr": settings.get("smtp_to", ""),
+                "password": settings.get("smtp_password", ""),
+                "use_tls": bool(settings.get("smtp_use_tls", True)),
             }
         except Exception as e:
             self.logger.error(f"Failed to load SMTP config: {e}")
@@ -59,9 +60,9 @@ class EmailService:
         self,
         subject: str,
         body: str,
-        alert_type: str = 'info',
+        alert_type: str = "info",
         user_id: int = 1,
-        device_name: str = '',
+        device_name: str = "",
     ) -> bool:
         """
         Send an alert email.
@@ -84,32 +85,33 @@ class EmailService:
             self.logger.debug("SMTP not configured, skipping email notification")
             return False
 
-        if not config['from_addr'] or not config['to_addr']:
+        if not config["from_addr"] or not config["to_addr"]:
             self.logger.debug("SMTP from/to address not configured")
             return False
 
         # Build email
-        msg = MIMEMultipart('alternative')
+        msg = MIMEMultipart("alternative")
         if device_name:
-            msg['Subject'] = f"[Mycelium] [{device_name}] {subject}"
+            msg["Subject"] = f"[Mycelium] [{device_name}] {subject}"
         else:
-            msg['Subject'] = f"[Mycelium] {subject}"
-        msg['From'] = config['from_addr']
-        msg['To'] = config['to_addr']
+            msg["Subject"] = f"[Mycelium] {subject}"
+        msg["From"] = config["from_addr"]
+        msg["To"] = config["to_addr"]
 
         # Alert severity colors and labels
         severity_config = {
-            'critical': {'color': '#d32f2f', 'bg': '#fde8e8', 'label': 'CRITICAL'},
-            'warning': {'color': '#f57c00', 'bg': '#fff3e0', 'label': 'WARNING'},
-            'info': {'color': '#1976d2', 'bg': '#e3f2fd', 'label': 'INFO'},
+            "critical": {"color": "#d32f2f", "bg": "#fde8e8", "label": "CRITICAL"},
+            "warning": {"color": "#f57c00", "bg": "#fff3e0", "label": "WARNING"},
+            "info": {"color": "#1976d2", "bg": "#e3f2fd", "label": "INFO"},
         }
-        sev = severity_config.get(alert_type, severity_config['info'])
+        sev = severity_config.get(alert_type, severity_config["info"])
 
         from datetime import datetime
-        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         # Plain text body
-        device_line = f"Device: {device_name}\n" if device_name else ''
+        device_line = f"Device: {device_name}\n" if device_name else ""
         plain_text = (
             f"Mycelium\n"
             f"A Myco-Monitor Farm Monitoring System\n"
@@ -123,7 +125,7 @@ class EmailService:
             f"This is an automated notification from Mycelium.\n"
             f"Manage alert settings at your Mycelium dashboard.\n"
         )
-        text_part = MIMEText(plain_text, 'plain')
+        text_part = MIMEText(plain_text, "plain")
         msg.attach(text_part)
 
         # Branded HTML email
@@ -144,8 +146,8 @@ class EmailService:
                     <td style="padding: 20px 30px 10px 30px;">
                         <table cellpadding="0" cellspacing="0">
                             <tr>
-                                <td style="background-color: {sev['color']}; color: #ffffff; padding: 4px 12px; border-radius: 4px; font-size: 11px; font-weight: bold; letter-spacing: 1px;">
-                                    {sev['label']}
+                                <td style="background-color: {sev["color"]}; color: #ffffff; padding: 4px 12px; border-radius: 4px; font-size: 11px; font-weight: bold; letter-spacing: 1px;">
+                                    {sev["label"]}
                                 </td>
                             </tr>
                         </table>
@@ -155,7 +157,7 @@ class EmailService:
                 <!-- Subject -->
                 <tr>
                     <td style="padding: 10px 30px 5px 30px;">
-                        {'<p style="margin: 0 0 4px 0; color: #a500a5; font-size: 13px; font-weight: bold;">' + device_name + '</p>' if device_name else ''}
+                        {'<p style="margin: 0 0 4px 0; color: #a500a5; font-size: 13px; font-weight: bold;">' + device_name + "</p>" if device_name else ""}
                         <h2 style="margin: 0; color: #333333; font-size: 18px;">{subject}</h2>
                         <p style="margin: 4px 0 0 0; color: #999999; font-size: 12px;">{timestamp}</p>
                     </td>
@@ -164,7 +166,7 @@ class EmailService:
                 <!-- Body -->
                 <tr>
                     <td style="padding: 15px 30px;">
-                        <div style="background-color: {sev['bg']}; border-left: 4px solid {sev['color']}; padding: 15px 20px; border-radius: 0 6px 6px 0;">
+                        <div style="background-color: {sev["bg"]}; border-left: 4px solid {sev["color"]}; padding: 15px 20px; border-radius: 0 6px 6px 0;">
                             <pre style="white-space: pre-wrap; font-family: 'SF Mono', Consolas, monospace; font-size: 13px; color: #333333; margin: 0; line-height: 1.5;">{body}</pre>
                         </div>
                     </td>
@@ -185,21 +187,21 @@ class EmailService:
         </body>
         </html>
         """
-        html_part = MIMEText(html_body, 'html')
+        html_part = MIMEText(html_body, "html")
         msg.attach(html_part)
 
         # Send
         try:
-            if config['use_tls']:
-                server = smtplib.SMTP(config['server'], config['port'], timeout=10)
+            if config["use_tls"]:
+                server = smtplib.SMTP(config["server"], config["port"], timeout=10)
                 server.starttls()
             else:
-                server = smtplib.SMTP_SSL(config['server'], config['port'], timeout=10)
+                server = smtplib.SMTP_SSL(config["server"], config["port"], timeout=10)
 
-            if config['password']:
-                server.login(config['from_addr'], config['password'])
+            if config["password"]:
+                server.login(config["from_addr"], config["password"])
 
-            server.sendmail(config['from_addr'], config['to_addr'], msg.as_string())
+            server.sendmail(config["from_addr"], config["to_addr"], msg.as_string())
             server.quit()
 
             self.logger.info(f"Alert email sent: {subject}")
@@ -214,18 +216,20 @@ class EmailService:
         self.send_alert_email(
             subject=f"{device_type.capitalize()} Device Offline: {device_name}",
             body=f"Device '{device_name}' ({device_type}) at {ip} is not responding.\n\n"
-                 f"Check the device's power supply and network connection.",
-            alert_type='critical',
+            f"Check the device's power supply and network connection.",
+            alert_type="critical",
         )
 
-    def send_threshold_alert(self, device_name: str, metric: str, value: float, threshold: float):
+    def send_threshold_alert(
+        self, device_name: str, metric: str, value: float, threshold: float
+    ):
         """Send alert when a reading exceeds a threshold."""
         self.send_alert_email(
             subject=f"Threshold Exceeded: {metric} on {device_name}",
             body=f"Device '{device_name}' reported {metric} = {value}\n"
-                 f"Threshold: {threshold}\n\n"
-                 f"Check the grow room conditions.",
-            alert_type='warning',
+            f"Threshold: {threshold}\n\n"
+            f"Check the grow room conditions.",
+            alert_type="warning",
         )
 
     def send_relay_failure_alert(self, device_name: str, relay_num: int, error: str):
@@ -233,5 +237,5 @@ class EmailService:
         self.send_alert_email(
             subject=f"Relay Failure on {device_name}",
             body=f"Relay {relay_num} on '{device_name}' failed:\n{error}",
-            alert_type='critical',
+            alert_type="critical",
         )
