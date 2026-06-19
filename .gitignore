@@ -46,3 +46,6 @@ curr_error.log
 _OLD_DOCS/
 plans/
 REFACTOR_PLAN.md
+
+# Build artifacts
+activate_mycelium.sh
