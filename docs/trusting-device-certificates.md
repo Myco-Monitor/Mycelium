@@ -1,35 +1,32 @@
-# Trusting Your Myco-Monitor Device Certificates
+# Trusting Your Myco-Monitor Certificates
 
-Your Spore and Hyphae devices serve their web interfaces over **HTTPS** using
-certificates issued by the **Myco-Monitor certificate authority (CA)**. This
-keeps the connection between your browser and your devices encrypted.
+The Myco-Monitor system uses **HTTPS everywhere**, secured by **two private
+certificate authorities (CAs)**. Because they're private (not pre-installed in
+your browser), you'll see warnings like *"Your connection is not private"* or
+*"Warning: Potential Security Risk Ahead"* until you trust them. Import each one
+**once per computer you browse from** to get a proper padlock.
 
-Because the Myco-Monitor CA is a private CA (not one of the public authorities
-pre-installed in your browser), the first time you open a device page your
-browser will show a warning such as *"Your connection is not private"* or
-*"Warning: Potential Security Risk Ahead."*
+| Certificate | File | Trusting it removes warnings on |
+| --- | --- | --- |
+| **Myco-Monitor CA** (devices) | [`config/ca_root.pem`](../config/ca_root.pem) | `https://spore-NNNN.local`, `https://hyphae-NNNN.local`, `https://192.168.4.1` (provisioning) |
+| **Mycelium web-UI CA** (per install) | `config/mycelium_local_ca.pem` | `https://mycelium.local:8443` (the Mycelium app itself) |
 
-To make these warnings go away — and to get a proper padlock when you visit your
-own devices — install the **Myco-Monitor CA root certificate** into your
-operating system or browser trust store, one time, on each device you browse
-from.
+Both are imported the **same way** — see [Install instructions](#install-instructions);
+just repeat the steps for each file. The certificates already include the
+hostnames above, so no further configuration is needed once a CA is trusted.
 
-> Mycelium itself does **not** need this. The Mycelium app already trusts your
-> devices using the bundled [`config/ca_root.pem`](../config/ca_root.pem). This
-> guide is only for trusting the device web pages **directly in a browser**,
-> e.g. the provisioning page or a device's own dashboard.
+Two important differences between them:
 
----
+- The **Myco-Monitor CA** ships with Mycelium and is the same for everyone — its
+  fingerprint is fixed (below).
+- The **Mycelium web-UI CA** is generated **locally** the first time you run
+  `python run.py --https`, so it's **unique to your install**. It only exists if
+  you serve Mycelium over HTTPS, and its fingerprint is printed at startup (verify
+  with `openssl`, see [docs/deployment.md](deployment.md)).
 
-## What this affects
-
-Once the CA root is trusted, these load without warnings:
-
-- A device dashboard at `https://spore-NNNN.local` / `https://hyphae-NNNN.local`
-- The provisioning page at `https://192.168.4.1` (when a device is in setup/AP mode)
-
-The certificates already include those hostnames, so no further configuration is
-needed after the CA is trusted.
+> Note: this is about trusting pages **in your browser**. The Mycelium *app*
+> already trusts your devices internally via the bundled
+> [`config/ca_root.pem`](../config/ca_root.pem) — that part needs nothing from you.
 
 ---
 
@@ -67,13 +64,31 @@ openssl x509 -in ca_root.pem -noout -subject -dates -fingerprint -sha256
 > Spore and Hyphae devices. Only install it if you obtained it from an official
 > Myco-Monitor source and the fingerprint matches above.
 
+### The Mycelium web-UI CA (if you run Mycelium over HTTPS)
+
+Grab this one from the machine running Mycelium:
+
+```
+config/mycelium_local_ca.pem
+```
+
+It's generated **locally on that machine** and is **unique to your install**, so
+there's no published fingerprint. Confirm it matches what the server prints at
+startup ("import this CA once: …"), or:
+
+```bash
+openssl x509 -in mycelium_local_ca.pem -noout -subject -fingerprint -sha256
+# Subject must be: CN = Mycelium Local CA, O = Mycelium
+```
+
 ---
 
 ## Install instructions
 
-Pick your platform. **Chrome, Edge, and Safari use the operating-system trust
-store**; **Firefox keeps its own**, so Firefox users should also do the Firefox
-section.
+Pick your platform and **repeat the steps for each CA you're trusting**
+(`ca_root.pem` for devices, `mycelium_local_ca.pem` for the Mycelium UI).
+**Chrome, Edge, and Safari use the operating-system trust store**; **Firefox
+keeps its own**, so Firefox users should also do the Firefox section.
 
 ### Windows (Chrome / Edge)
 
@@ -163,14 +178,16 @@ Exact wording varies by version and manufacturer.
 
 ## Verify it worked
 
-Open a device page in your browser, for example:
+Open a page in your browser, for example:
 
 ```
-https://192.168.4.1        (a device in setup/AP mode)
-https://spore-1234.local   (a configured Spore)
+https://192.168.4.1         (a device in setup/AP mode)        -> Myco-Monitor CA
+https://spore-1234.local    (a configured Spore)               -> Myco-Monitor CA
+https://mycelium.local:8443 (the Mycelium app, if on HTTPS)    -> Mycelium web-UI CA
 ```
 
-You should now see a normal padlock and **no** certificate warning.
+You should now see a normal padlock and **no** certificate warning. If one URL
+still warns, you likely haven't imported that URL's CA yet (the two are separate).
 
 ---
 
