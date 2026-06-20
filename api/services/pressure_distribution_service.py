@@ -155,7 +155,12 @@ class PressureDistributionService:
             async with aiohttp.ClientSession(connector=connector) as session:
                 async with session.post(
                     f"https://{ip}/api/ambient-pressure",
-                    json={"pressure": int(pressure_hpa)},
+                    # The Spore parses the body as a bare integer (strtol) and
+                    # rejects anything else with HTTP 400 -- it does NOT accept
+                    # JSON. Send plain-text hPa, matching the firmware handler
+                    # and SporeClient.set_ambient_pressure.
+                    data=str(int(round(pressure_hpa))),
+                    headers={"Content-Type": "text/plain"},
                     timeout=aiohttp.ClientTimeout(total=5),
                 ) as resp:
                     if resp.status == 200:
