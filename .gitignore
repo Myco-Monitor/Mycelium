@@ -24,7 +24,6 @@ data/
 *.pem.key
 .env
 .env.*
-!.env.example
 
 # IDE
 .vscode/

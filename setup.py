@@ -345,31 +345,6 @@ def create_config_files():
 
     print(f"✅ Created {config_file}")
 
-    # Create environment file template
-    env_file = project_root / ".env.example"
-    env_content = """# Mycelium Project Environment Variables
-# Copy this file to .env and update with your values
-
-# Application Settings
-FLASK_SECRET_KEY=your-secret-key-here
-DEBUG=True
-
-# Database Settings
-DATABASE_PATH=data/mycelium.db
-
-# Device Integration
-DEVICE_DISCOVERY_ENABLED=True
-DEVICE_POLLING_INTERVAL=30
-
-# Security
-SESSION_TIMEOUT=3600
-"""
-
-    with open(env_file, "w") as f:
-        f.write(env_content)
-
-    print(f"✅ Created {env_file}")
-
 
 def validate_installation():
     """Validate that the installation is working correctly."""
