@@ -8,12 +8,28 @@ in the Mycelium database. It includes authentication-related fields and function
 from typing import Dict, List, Optional, Any
 import hashlib
 
+from storage import crypto
 from storage.db_utils import (
     execute_query,
     execute_insert,
     execute_update,
     get_timestamp,
 )
+
+# Columns stored encrypted at rest (Fernet via storage.crypto). Encrypted
+# transparently on write and decrypted on read, so callers see plaintext.
+# user_password is intentionally excluded -- it is a one-way salted hash.
+_ENCRYPTED_FIELDS = ("smtp_password", "owm_api_key")
+
+
+def _decrypt_row(row: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Return the row with sensitive fields decrypted (legacy plaintext passes through)."""
+    if not row:
+        return row
+    for field in _ENCRYPTED_FIELDS:
+        if row.get(field):
+            row[field] = crypto.decrypt_or_plaintext(row[field])
+    return row
 
 
 def create_user_setting(
@@ -59,7 +75,7 @@ def create_user_setting(
         (
             user_name,
             user_password_hash,
-            owm_api_key,
+            crypto.encrypt(owm_api_key),
             owm_zip_code,
             timezone_name,
             time_format,
@@ -83,7 +99,7 @@ def get_user_setting(user_id: int) -> Optional[Dict[str, Any]]:
     """
     query = "SELECT * FROM user_settings WHERE user_id = ?"
     results = execute_query(query, (user_id,))
-    return results[0] if results else None
+    return _decrypt_row(results[0]) if results else None
 
 
 def get_farm_user_settings(farm_id: int) -> List[Dict[str, Any]]:
@@ -97,7 +113,7 @@ def get_farm_user_settings(farm_id: int) -> List[Dict[str, Any]]:
         List[Dict[str, Any]]: List of user setting records
     """
     query = "SELECT * FROM user_settings WHERE farm_id = ?"
-    return execute_query(query, (farm_id,))
+    return [_decrypt_row(r) for r in execute_query(query, (farm_id,))]
 
 
 def get_all_user_settings() -> List[Dict[str, Any]]:
@@ -108,7 +124,7 @@ def get_all_user_settings() -> List[Dict[str, Any]]:
         List[Dict[str, Any]]: List of all user setting records
     """
     query = "SELECT * FROM user_settings"
-    return execute_query(query, ())
+    return [_decrypt_row(r) for r in execute_query(query, ())]
 
 
 def update_user_setting(
@@ -165,7 +181,7 @@ def update_user_setting(
 
     if owm_api_key is not None:
         set_clause.append("owm_api_key = ?")
-        params.append(owm_api_key)
+        params.append(crypto.encrypt(owm_api_key))
 
     if owm_zip_code is not None:
         set_clause.append("owm_zip_code = ?")
@@ -213,7 +229,7 @@ def update_user_setting(
 
     if smtp_password is not None:
         set_clause.append("smtp_password = ?")
-        params.append(smtp_password)
+        params.append(crypto.encrypt(smtp_password))
 
     if smtp_use_tls is not None:
         set_clause.append("smtp_use_tls = ?")

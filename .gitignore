@@ -21,9 +21,14 @@ data/
 
 # Sensitive files
 .pin_key
+.storage_secret
 *.pem.key
 .env
 .env.*
+# Auto-generated Mycelium web-server TLS cert/key (per-install; never commit).
+# config/ca_root.pem stays tracked.
+config/mycelium_cert.pem
+config/mycelium_key.pem
 
 # IDE
 .vscode/

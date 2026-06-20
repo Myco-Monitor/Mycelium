@@ -172,10 +172,17 @@ python run.py [OPTIONS]
 
 Options:
   --host HOST     Host to bind to (default: 127.0.0.1)
-  --port PORT     Port to bind to (default: 8051)
+  --port PORT     Port to bind to (default: 8051 HTTP / 8443 HTTPS)
   --debug         Enable debug mode
   --dev           Development mode (hot reload, verbose logging)
+  --https         Serve over HTTPS/TLS (self-signed cert auto-generated)
+  --cert PATH     TLS certificate (PEM); implies --https
+  --key PATH      TLS private key (PEM)
 ```
+
+For network deployments, run with `--https` to encrypt logins and reach the UI at
+`https://mycelium.local:8443`. See [docs/deployment.md](docs/deployment.md) for the
+full security model (TLS, secrets at rest, host hardening).
 
 ---
 

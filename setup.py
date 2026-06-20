@@ -279,8 +279,13 @@ def initialize_database(reset=False):
 
     db_path = project_root / "data" / "mycelium.db"
 
-    # Create storage directory if it doesn't exist
+    # Create storage directory if it doesn't exist. data/ holds machine secrets
+    # (.pin_key, .storage_secret) and the DB, so keep it owner-only.
     db_path.parent.mkdir(exist_ok=True)
+    try:
+        os.chmod(db_path.parent, 0o700)
+    except OSError:
+        pass
 
     # Create logs directory for application logging
     logs_dir = project_root / "logs"

@@ -6,12 +6,16 @@ This script starts the Mycelium web application (NiceGUI + FastAPI).
 
 Usage:
     python run.py [--host HOST] [--port PORT] [--debug] [--dev]
+                  [--https] [--cert PATH] [--key PATH]
 
 Options:
     --host HOST     Host to bind to (default: 127.0.0.1)
-    --port PORT     Port to bind to (default: 8051)
+    --port PORT     Port to bind to (default: 8051 HTTP / 8443 HTTPS)
     --debug         Enable debug mode
     --dev           Development mode (auto-reload, verbose logging)
+    --https         Serve over HTTPS/TLS (self-signed cert auto-generated)
+    --cert PATH     TLS certificate (PEM); implies --https. Default: self-signed
+    --key PATH      TLS private key (PEM)
 """
 
 import sys
@@ -115,14 +119,49 @@ def check_prerequisites():
     return True
 
 
-def start_nicegui(host="127.0.0.1", port=8051, debug=False, dev=False):
+def start_nicegui(
+    host="127.0.0.1",
+    port=8051,
+    debug=False,
+    dev=False,
+    https=False,
+    cert_file=None,
+    key_file=None,
+):
     """Start the NiceGUI application."""
     if not check_prerequisites():
         return 1
 
+    from storage.crypto import get_or_create_storage_secret
+
+    scheme = "https" if https else "http"
+    run_kwargs = {}
+
+    if https:
+        # Generate a self-signed cert on first run, or use a provided one
+        # (e.g. a Myco-Monitor CA-issued mycelium.local cert). See cert_manager.
+        from cert_manager import ensure_cert
+
+        cert_file, key_file = ensure_cert(cert_file, key_file)
+        run_kwargs["ssl_certfile"] = cert_file
+        run_kwargs["ssl_keyfile"] = key_file
+
     print("Starting Mycelium Farm Monitor...")
-    print(f"  Server: http://{host}:{port}")
+    print(f"  Server: {scheme}://{host}:{port}")
     print(f"  Debug: {'ON' if debug or dev else 'OFF'}")
+    if https:
+        print(f"  TLS cert: {cert_file}")
+
+    # Advertise mycelium.local on the LAN when serving HTTPS beyond loopback, so
+    # any computer on the network can reach it by name. Skipped in dev/reload to
+    # avoid double-registration when the reloader re-execs.
+    advertise = https and not dev and host not in ("127.0.0.1", "localhost")
+    if advertise:
+        import mdns_advertise
+        from nicegui import app as _app
+
+        if mdns_advertise.start(port):
+            _app.on_shutdown(mdns_advertise.stop)
 
     try:
         # Import the NiceGUI app module (registers all routes)
@@ -133,7 +172,9 @@ def start_nicegui(host="127.0.0.1", port=8051, debug=False, dev=False):
         print("=" * 60)
         print("  Mycelium Farm Monitor is running!")
         print("=" * 60)
-        print(f"  Open your browser to: http://{host}:{port}")
+        print(f"  Open your browser to: {scheme}://{host}:{port}")
+        if advertise:
+            print(f"  Or from any LAN computer: {scheme}://mycelium.local:{port}")
         print("  Press Ctrl+C to stop")
         print("=" * 60)
 
@@ -143,7 +184,8 @@ def start_nicegui(host="127.0.0.1", port=8051, debug=False, dev=False):
             title="Mycelium - Mushroom Farm Monitor",
             reload=dev,
             show=False,
-            storage_secret="mycelium-storage-secret-change-in-production",
+            storage_secret=get_or_create_storage_secret(),
+            **run_kwargs,
         )
 
     except KeyboardInterrupt:
@@ -173,17 +215,46 @@ def main():
         action="store_true",
         help="Development mode (auto-reload, verbose logging)",
     )
+    parser.add_argument(
+        "--https",
+        action="store_true",
+        help="Serve over HTTPS/TLS (default port 8443; self-signed cert auto-generated)",
+    )
+    parser.add_argument(
+        "--cert",
+        default=None,
+        help="Path to a TLS certificate (PEM). Implies --https. "
+        "Default: auto self-signed in config/.",
+    )
+    parser.add_argument(
+        "--key", default=None, help="Path to the TLS private key (PEM)."
+    )
 
     args = parser.parse_args()
 
     config = load_config()
     app_config = config.get("app", {})
 
+    https = args.https or bool(args.cert) or app_config.get("https", False)
+
     host = args.host or app_config.get("host", "127.0.0.1")
-    port = args.port or 8051
+    if args.port:
+        port = args.port
+    elif https:
+        port = 8443
+    else:
+        port = app_config.get("port", 8051)
     debug = args.debug or app_config.get("debug", False)
 
-    return start_nicegui(host=host, port=port, debug=debug, dev=args.dev)
+    return start_nicegui(
+        host=host,
+        port=port,
+        debug=debug,
+        dev=args.dev,
+        https=https,
+        cert_file=args.cert,
+        key_file=args.key,
+    )
 
 
 if __name__ == "__main__":
