@@ -119,18 +119,32 @@ Mycelium/
    cd myco-monitor/Mycelium
    ```
 
-2. **Install dependencies:**
-   ```bash
-   pip install -r requirements.txt
-   ```
+2. **Run the setup script:**
 
-3. **Run the setup script:**
+   The setup script builds an isolated environment (virtualenv or conda), installs
+   all dependencies into it, and initializes the database. You do **not** need to
+   run `pip install` separately.
+
    ```bash
-   # Basic setup with sample data
-   python setup.py --sample-data
+   # Basic setup (prompts for environment type)
+   python setup.py
+
+   # Non-interactive: create a virtualenv named 'mycelium'
+   python setup.py --env-type venv
 
    # Reset database (WARNING: deletes existing data)
-   python setup.py --reset-db --sample-data
+   python setup.py --env-type venv --reset-db
+   ```
+
+3. **Activate the environment:**
+   ```bash
+   # virtualenv
+   source mycelium/bin/activate
+   # OR use the generated helper script
+   source activate_mycelium.sh
+
+   # conda
+   conda activate mycelium
    ```
 
 4. **Start the application:**
@@ -189,7 +203,7 @@ Application settings are in `config/app_config.json`:
 
 ```json
 {
-  "app": { "name": "Mycelium Farm Monitor", "version": "2.0.0", "port": 8051 },
+  "app": { "name": "Mycelium Farm Monitor", "port": 8051 },
   "tls": { "ca_cert_path": "config/ca_root.pem", "verify_ssl": true },
   "discovery": { "mdns_enabled": true, "cidr_fallback": true, "scan_port": 443 },
   "devices": { "polling_interval_seconds": 30, "timeout_seconds": 10 }

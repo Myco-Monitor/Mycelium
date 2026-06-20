@@ -25,6 +25,8 @@ project_root = Path(__file__).parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
+from version import __version__
+
 
 def load_config():
     """Load application configuration."""
@@ -33,7 +35,7 @@ def load_config():
     default_config = {
         "app": {
             "name": "Mycelium Farm Monitor",
-            "version": "2.0.0",
+            "version": __version__,
             "debug": False,
             "host": "127.0.0.1",
             "port": 8051,
@@ -44,6 +46,8 @@ def load_config():
         try:
             with open(config_file, "r") as f:
                 config = json.load(f)
+            # Version is owned by version.py, not the config file
+            config.setdefault("app", {})["version"] = __version__
             return config
         except Exception as e:
             print(f"Warning: Could not load config file: {e}")

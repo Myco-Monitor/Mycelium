@@ -5,18 +5,17 @@ Mycelium Project Setup Script
 This script sets up the Mycelium mushroom farm monitoring system by:
 1. Creating or using a Python environment (virtualenv or conda)
 2. Installing required dependencies in the environment
-3. Initializing the database with schema and sample data
+3. Initializing the database with schema
 4. Creating necessary directories and configuration files
 5. Validating the installation
 
 Usage:
-    python setup.py [--env-type {venv,conda,existing}] [--env-name NAME] [--dev] [--sample-data] [--reset-db]
+    python setup.py [--env-type {venv,conda,existing}] [--env-name NAME] [--dev] [--reset-db]
 
 Options:
     --env-type      Environment type: 'venv' (virtualenv), 'conda', or 'existing' (use current)
     --env-name      Environment name (default: 'mycelium')
     --dev           Install development dependencies (pytest, etc.)
-    --sample-data   Initialize database with sample data for testing
     --reset-db      Reset database (WARNING: deletes all existing data)
 """
 
@@ -31,6 +30,8 @@ import json
 # Add project root to path
 project_root = Path(__file__).parent
 sys.path.append(str(project_root))
+
+from version import __version__
 
 
 def detect_environment_tools():
@@ -321,10 +322,10 @@ def create_config_files():
     app_config = {
         "app": {
             "name": "Mycelium Farm Monitor",
-            "version": "1.0.0",
+            "version": __version__,
             "debug": True,
             "host": "127.0.0.1",
-            "port": 8050,
+            "port": 8051,
         },
         "database": {"path": "data/mycelium.db", "backup_interval_hours": 24},
         "security": {
@@ -580,13 +581,13 @@ def main():
         activation_cmd = activate_environment_message(env_type, env_name)
         print(f"1. Activate environment: {activation_cmd}")
         print("2. Run: python run.py")
-        print("3. Open browser to: http://localhost:8050")
+        print("3. Open browser to: http://localhost:8051")
 
         # Create activation script
         create_activation_script(env_type, env_name)
     else:
         print("1. Run: python run.py")
-        print("2. Open browser to: http://localhost:8050")
+        print("2. Open browser to: http://localhost:8051")
 
     return 0
 
