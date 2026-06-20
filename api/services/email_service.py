@@ -63,6 +63,7 @@ class EmailService:
         alert_type: str = "info",
         user_id: int = 1,
         device_name: str = "",
+        to_override: Optional[str] = None,
     ) -> bool:
         """
         Send an alert email.
@@ -85,8 +86,11 @@ class EmailService:
             self.logger.debug("SMTP not configured, skipping email notification")
             return False
 
-        if not config["from_addr"] or not config["to_addr"]:
-            self.logger.debug("SMTP from/to address not configured")
+        # Recipient: an explicit override (e.g. an alert rule's target) wins;
+        # otherwise fall back to the configured smtp_to address.
+        recipient = (to_override or "").strip() or config["to_addr"]
+        if not config["from_addr"] or not recipient:
+            self.logger.debug("SMTP from address or recipient not configured")
             return False
 
         # Build email
@@ -96,7 +100,7 @@ class EmailService:
         else:
             msg["Subject"] = f"[Mycelium] {subject}"
         msg["From"] = config["from_addr"]
-        msg["To"] = config["to_addr"]
+        msg["To"] = recipient
 
         # Alert severity colors and labels
         severity_config = {
@@ -201,7 +205,7 @@ class EmailService:
             if config["password"]:
                 server.login(config["from_addr"], config["password"])
 
-            server.sendmail(config["from_addr"], config["to_addr"], msg.as_string())
+            server.sendmail(config["from_addr"], recipient, msg.as_string())
             server.quit()
 
             self.logger.info(f"Alert email sent: {subject}")

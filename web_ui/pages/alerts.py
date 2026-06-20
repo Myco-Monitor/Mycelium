@@ -4,6 +4,7 @@ Alerts page for Mycelium NiceGUI application.
 Provides alert management with active alerts, alert history, and rule configuration.
 """
 
+import re
 from datetime import datetime
 from typing import Optional
 
@@ -13,6 +14,14 @@ from web_ui.theme import get_colors
 
 from api.services.alert_service import AlertService
 from storage.tables import device_spore, device_hyphae, grow_rooms
+
+
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def _is_valid_email(addr: str) -> bool:
+    """Loose email format check for alert-rule targets."""
+    return bool(_EMAIL_RE.match((addr or "").strip()))
 
 
 # Alert type display mappings
@@ -626,6 +635,17 @@ def _save_rule(
         ui.notify("Rule name is required", type="negative")
         return
 
+    # For email alerts, a non-blank target must be a valid address. Blank is
+    # allowed -- it falls back to the Settings smtp_to address.
+    if notification == "email" and notification_target and not _is_valid_email(
+        notification_target
+    ):
+        ui.notify(
+            "Enter a valid email address, or leave it blank to use your Settings email",
+            type="negative",
+        )
+        return
+
     # Parse device selection
     parsed_device_type = device_type if device_type else None
     device_id = None
@@ -747,6 +767,16 @@ def _open_edit_rule_dialog(rule: dict, alert_service: AlertService, colors: dict
             def _save_edit():
                 if not rule_name.value or not rule_name.value.strip():
                     ui.notify("Rule name is required", type="negative")
+                    return
+                if (
+                    notification_select.value == "email"
+                    and notification_target.value
+                    and not _is_valid_email(notification_target.value)
+                ):
+                    ui.notify(
+                        "Enter a valid email address, or leave it blank to use your Settings email",
+                        type="negative",
+                    )
                     return
                 try:
                     kwargs = {

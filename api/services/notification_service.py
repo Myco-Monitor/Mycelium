@@ -48,13 +48,42 @@ class NotificationService:
             # UI notifications are handled by the dashboard
             return True
 
-        if method == "email" and target:
-            return self.send_email_alert(alert_id, target, rule, device, message)
+        if method == "email":
+            # Consolidated path: send via the Settings SMTP config (user_settings),
+            # not the legacy notification_settings table. Recipient is the rule's
+            # target, falling back to the configured smtp_to address.
+            return self._send_email_via_user_settings(rule, device, message, target)
 
         if method == "webhook" and target:
             return self.send_webhook_alert(alert_id, target, rule, device, message)
 
         return False
+
+    def _send_email_via_user_settings(
+        self,
+        rule: Dict[str, Any],
+        device: Dict[str, Any],
+        message: str,
+        target: Optional[str],
+    ) -> bool:
+        """Send an alert email through EmailService (user_settings SMTP).
+
+        This is the live email path. The legacy notification_settings-backed
+        methods below (send_email_alert, save_email_settings, quiet hours, etc.)
+        are kept dormant for now and are not used.
+        """
+        from api.services.email_service import EmailService
+
+        subject = rule.get("rule_name") or "Environmental alert"
+        alert_type = rule.get("severity") or "warning"
+        device_name = device.get("device_name", "") or ""
+        return EmailService().send_alert_email(
+            subject=subject,
+            body=message,
+            alert_type=alert_type,
+            device_name=device_name,
+            to_override=target,
+        )
 
     # Email notifications
 
