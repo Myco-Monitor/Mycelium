@@ -173,9 +173,10 @@ Mycelium/
    | Local | `http://localhost:8051` |
    | Network (HTTPS) | `https://mycelium.local:8443` (or `https://<this-host-ip>:8443`) |
 
-   > The auto-generated self-signed certificate triggers a one-time browser
-   > warning — accept it, or install a trusted cert (e.g. one issued by your
-   > Myco-Monitor CA). See [docs/deployment.md](docs/deployment.md).
+   > First HTTPS run generates a per-install **local CA**. Import
+   > `config/mycelium_local_ca.pem` into your browser once (like `ca_root.pem`)
+   > for warning-free HTTPS — or just accept the one-time warning. See
+   > [docs/deployment.md](docs/deployment.md).
 
 ---
 
@@ -234,8 +235,8 @@ Application settings are in `config/app_config.json`:
 
 ## Security
 
-- **Optional HTTPS for the web UI** (`--https`) — auto-generated self-signed cert,
-  or bring your own (e.g. a CA-issued `mycelium.local` cert)
+- **Optional HTTPS for the web UI** (`--https`) — per-install local CA you import
+  once (mkcert-style), or bring your own cert
 - HTTPS-only device communication using CSP-provisioned certificates (`ca_root.pem`)
 - **Secrets encrypted at rest** — device PINs, SMTP password, and OWM API key via
   Fernet; session-signing key auto-generated per install (no secrets to set by hand)

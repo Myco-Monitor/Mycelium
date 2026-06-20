@@ -24,11 +24,20 @@ python run.py --https            # serves https://<host>:8443, self-signed cert
 python run.py --https --host 0.0.0.0   # reachable across the LAN
 ```
 
-On first `--https` run, a self-signed cert + key are generated into
-`config/mycelium_cert.pem` / `config/mycelium_key.pem` (key `0600`, both
-gitignored). The cert's SAN covers `mycelium.local`, the machine's real
-`<hostname>.local`, `localhost`, `127.0.0.1`, and the detected LAN IP — so the
-URL matches however you reach it.
+On first `--https` run, Mycelium generates a **per-install local CA** and issues
+the web-server (leaf) cert from it — the same model as
+[mkcert](https://github.com/FiloSottile/mkcert). Files land in `config/`
+(gitignored, keys `0600`):
+
+| File | Role |
+|---|---|
+| `mycelium_local_ca.pem` | the local CA — **import this** to trust the UI |
+| `mycelium_local_ca_key.pem` | local CA private key |
+| `mycelium_cert.pem` / `mycelium_key.pem` | the served leaf cert + key |
+
+The leaf's SAN covers `mycelium.local`, the machine's real `<hostname>.local`,
+`localhost`, `127.0.0.1`, and the detected LAN IP — so the URL matches however
+you reach it.
 
 ### `mycelium.local`
 
@@ -38,42 +47,40 @@ over mDNS, so any computer on the LAN can browse to `https://mycelium.local:8443
 OS to resolve `.local` (built in on macOS/Windows; install `avahi`/`nss-mdns` on
 Linux).
 
-### The browser warning (self-signed)
+### Removing the browser warning — import the local CA once
 
-A self-signed cert encrypts traffic but isn't trusted by browsers, so you'll get
-a one-time warning. Either accept it, or use a trusted cert (below).
+The server cert is issued by your local CA, which browsers don't trust yet, so
+you'll get a warning until you import the CA. Do it **once per client computer**
+(it then covers this Mycelium install, and survives leaf-cert regeneration):
 
-### Bring your own cert (no warning)
+- **Firefox:** Settings → Privacy & Security → Certificates → View Certificates →
+  *Authorities* → Import → select `config/mycelium_local_ca.pem` → check
+  "Trust this CA to identify websites."
+- **macOS:** add `mycelium_local_ca.pem` to Keychain and mark it trusted.
+- **Windows:** import into "Trusted Root Certification Authorities."
+- **Linux (system):** copy to `/usr/local/share/ca-certificates/` → `update-ca-certificates`.
+
+This is the same kind of one-time trust you give `ca_root.pem` for devices —
+just a **separate** CA for the web UI. Mycelium never asks you to get a cert
+signed by anyone; each install is self-contained.
+
+### Bring your own cert (alternative)
 
 Point Mycelium at any cert/key you provide — they take precedence over the
-self-signed pair:
+local-CA pair, and the local CA is then unused:
 
 ```bash
 python run.py --cert /path/to/cert.pem --key /path/to/key.pem
 # or drop them at config/mycelium_cert.pem + config/mycelium_key.pem
 ```
 
-**Issuing a `mycelium.local` cert from the Myco-Monitor CA** (so browsers that
-already trust `ca_root.pem` connect without warnings). On the air-gapped CA host:
-
-```bash
-# 1) key + CSR for the Mycelium host
-openssl req -new -newkey rsa:2048 -nodes \
-  -keyout mycelium_key.pem -out mycelium.csr \
-  -subj "/CN=mycelium.local"
-
-# 2) sign with the Myco-Monitor CA, with the SAN browsers will see
-openssl x509 -req -in mycelium.csr -CA ca_root.pem -CAkey <ca_key> -CAcreateserial \
-  -out mycelium_cert.pem -days 825 -sha256 \
-  -extfile <(printf "subjectAltName=DNS:mycelium.local,IP:<lan-ip>")
-```
-
-Copy `mycelium_cert.pem` + `mycelium_key.pem` to the Mycelium host's `config/`.
-Clients that trust `ca_root.pem` then get warning-free HTTPS.
-
-> Note: this is for **your own / provisioned** deployments. The cert+key are
-> per-host and must never be committed — open-source users get the self-signed
-> path instead.
+For example, to issue a `mycelium.local` cert from the **Myco-Monitor CA** (so
+browsers already trusting `ca_root.pem` need no extra import): generate a key +
+CSR (`CN=mycelium.local`, `SAN=DNS:mycelium.local,IP:<lan-ip>`) and sign it with
+the CA — the CA private key lives on the **YubiKey**, so sign via PKCS#11
+(`yubico-piv-tool` / `openssl` + the `pkcs11` engine), i.e. the **same mechanism
+the CSP TLS provisioning uses to issue device certs** — not a file-based key.
+Copy the resulting cert + key into `config/`.
 
 ---
 

@@ -25,10 +25,9 @@ data/
 *.pem.key
 .env
 .env.*
-# Auto-generated Mycelium web-server TLS cert/key (per-install; never commit).
-# config/ca_root.pem stays tracked.
-config/mycelium_cert.pem
-config/mycelium_key.pem
+# Auto-generated Mycelium web-server TLS material (per-install; never commit):
+# local CA cert/key + the served leaf cert/key. config/ca_root.pem stays tracked.
+config/mycelium_*.pem
 
 # IDE
 .vscode/

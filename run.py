@@ -137,20 +137,26 @@ def start_nicegui(
     scheme = "https" if https else "http"
     run_kwargs = {}
 
+    bring_your_own_cert = bool(cert_file or key_file)
+    local_ca = None
     if https:
-        # Generate a self-signed cert on first run, or use a provided one
-        # (e.g. a Myco-Monitor CA-issued mycelium.local cert). See cert_manager.
-        from cert_manager import ensure_cert
+        # Issue a leaf from the per-install local CA on first run, or use a
+        # provided cert (e.g. a Myco-Monitor CA-issued one). See cert_manager.
+        from cert_manager import ensure_cert, local_ca_path
 
         cert_file, key_file = ensure_cert(cert_file, key_file)
         run_kwargs["ssl_certfile"] = cert_file
         run_kwargs["ssl_keyfile"] = key_file
+        if not bring_your_own_cert:
+            local_ca = local_ca_path()
 
     print("Starting Mycelium Farm Monitor...")
     print(f"  Server: {scheme}://{host}:{port}")
     print(f"  Debug: {'ON' if debug or dev else 'OFF'}")
     if https:
         print(f"  TLS cert: {cert_file}")
+        if local_ca:
+            print(f"  To remove browser warnings, import this CA once: {local_ca}")
 
     # Advertise mycelium.local on the LAN when serving HTTPS beyond loopback, so
     # any computer on the network can reach it by name. Skipped in dev/reload to
