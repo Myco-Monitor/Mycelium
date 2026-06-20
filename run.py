@@ -204,7 +204,9 @@ def main():
     """Main run function."""
     parser = argparse.ArgumentParser(description="Run Mycelium Project")
     parser.add_argument(
-        "--host", default=None, help="Host to bind to (default: 127.0.0.1)"
+        "--host",
+        default=None,
+        help="Interface to bind to (default: 127.0.0.1; use 0.0.0.0 for the whole LAN)",
     )
     parser.add_argument(
         "--port", type=int, default=None, help="Port to bind to (default: 8051)"
@@ -245,6 +247,22 @@ def main():
     else:
         port = app_config.get("port", 8051)
     debug = args.debug or app_config.get("debug", False)
+
+    # --host is the interface to bind to, not the name clients use. A hostname
+    # that doesn't resolve to a local interface (e.g. "mycelium.local") can't be
+    # bound -- turn the cryptic getaddrinfo failure into actionable guidance.
+    import socket as _socket
+
+    try:
+        _socket.getaddrinfo(host, port, type=_socket.SOCK_STREAM)
+    except _socket.gaierror:
+        print(f"ERROR: cannot bind to --host '{host}' (not a local interface address).")
+        print("")
+        print("--host is the interface to listen on, not the address browsers use.")
+        print("To serve over the network and be reachable as mycelium.local, run:")
+        print("    python run.py --https --host 0.0.0.0")
+        print("then open https://mycelium.local:8443 from any computer on the LAN.")
+        return 1
 
     return start_nicegui(
         host=host,
