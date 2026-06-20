@@ -50,15 +50,26 @@ Linux).
 ### Removing the browser warning — import the local CA once
 
 The server cert is issued by your local CA, which browsers don't trust yet, so
-you'll get a warning until you import the CA. Do it **once per client computer**
-(it then covers this Mycelium install, and survives leaf-cert regeneration):
+you'll get a warning until you import the CA. Import **`config/mycelium_local_ca.pem`**
+(the CA — *not* the leaf `mycelium_cert.pem`) once per client computer; it then
+covers this Mycelium install and survives leaf-cert regeneration.
 
-- **Firefox:** Settings → Privacy & Security → Certificates → View Certificates →
-  *Authorities* → Import → select `config/mycelium_local_ca.pem` → check
-  "Trust this CA to identify websites."
-- **macOS:** add `mycelium_local_ca.pem` to Keychain and mark it trusted.
+> **Firefox keeps its own certificate store** — separate from the operating
+> system's. Importing the CA into the OS keychain does **not** apply to Firefox;
+> you must import it inside Firefox itself (below). Restart Firefox afterward.
+
+- **Firefox:** Settings → **Privacy & Security** → *Connection and Software
+  Security* → **Advanced Settings** → *Certificates* → **Manage Certificates** →
+  *Authorities* tab → **Import** → select `config/mycelium_local_ca.pem` → check
+  **"Trust this CA to identify websites"** → OK → **restart Firefox**.
+- **Chrome/Edge & macOS:** add `mycelium_local_ca.pem` to the OS trust store
+  (macOS Keychain → mark trusted; these browsers use the OS store).
 - **Windows:** import into "Trusted Root Certification Authorities."
-- **Linux (system):** copy to `/usr/local/share/ca-certificates/` → `update-ca-certificates`.
+- **Linux (system / curl):** copy to `/usr/local/share/ca-certificates/` →
+  `sudo update-ca-certificates`.
+
+To confirm you imported the right CA, match its SHA-256 fingerprint in the
+browser against `openssl x509 -in config/mycelium_local_ca.pem -noout -fingerprint -sha256`.
 
 This is the same kind of one-time trust you give `ca_root.pem` for devices —
 just a **separate** CA for the web UI. Mycelium never asks you to get a cert

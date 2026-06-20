@@ -127,12 +127,14 @@ sudo update-ca-trust
 
 ### Firefox (all platforms)
 
-Firefox has its own trust store, independent of the OS.
+Firefox has its own trust store, independent of the OS — so even if the CA is in
+your OS store, you must also import it here.
 
-1. **Settings → Privacy & Security → Certificates → View Certificates…**
+1. **Settings → Privacy & Security → Connection and Software Security →
+   Advanced Settings → Certificates → Manage Certificates…**
 2. Open the **Authorities** tab → **Import…**
 3. Select `ca_root.pem`.
-4. Check **Trust this CA to identify websites** → **OK**.
+4. Check **Trust this CA to identify websites** → **OK**, then **restart Firefox**.
 
 ### iOS / iPadOS (Safari)
 
