@@ -147,21 +147,35 @@ Mycelium/
    ```
 
 4. **Start the application:**
+
+   Local use, same machine (plain HTTP on loopback):
    ```bash
-   # NiceGUI application (default, port 8051)
    python run.py
+   ```
 
-   # Development mode with hot reload
+   Over the network (HTTPS + reachable by name) — **recommended for real use:**
+   ```bash
+   python run.py --https --host 0.0.0.0
+   ```
+   Serves HTTPS on port 8443, encrypts logins, auto-generates a self-signed
+   certificate on first run, and advertises `mycelium.local` over mDNS so any
+   computer on the LAN can reach it.
+
+   Development mode (hot reload):
+   ```bash
    python run.py --dev
-
-   # Custom host/port
-   python run.py --host 0.0.0.0 --port 8080
    ```
 
-5. **Open your browser to:**
-   ```
-   http://localhost:8051
-   ```
+5. **Open your browser:**
+
+   | Mode | URL |
+   |------|-----|
+   | Local | `http://localhost:8051` |
+   | Network (HTTPS) | `https://mycelium.local:8443` (or `https://<this-host-ip>:8443`) |
+
+   > The auto-generated self-signed certificate triggers a one-time browser
+   > warning — accept it, or install a trusted cert (e.g. one issued by your
+   > Myco-Monitor CA). See [docs/deployment.md](docs/deployment.md).
 
 ---
 
@@ -171,7 +185,7 @@ Mycelium/
 python run.py [OPTIONS]
 
 Options:
-  --host HOST     Host to bind to (default: 127.0.0.1)
+  --host HOST     Interface to bind to (default: 127.0.0.1; use 0.0.0.0 for the LAN)
   --port PORT     Port to bind to (default: 8051 HTTP / 8443 HTTPS)
   --debug         Enable debug mode
   --dev           Development mode (hot reload, verbose logging)
@@ -220,11 +234,16 @@ Application settings are in `config/app_config.json`:
 
 ## Security
 
-- HTTPS-only device communication using CSP-provisioned certificates
-- Per-device PIN vault with Fernet encryption
+- **Optional HTTPS for the web UI** (`--https`) — auto-generated self-signed cert,
+  or bring your own (e.g. a CA-issued `mycelium.local` cert)
+- HTTPS-only device communication using CSP-provisioned certificates (`ca_root.pem`)
+- **Secrets encrypted at rest** — device PINs, SMTP password, and OWM API key via
+  Fernet; session-signing key auto-generated per install (no secrets to set by hand)
 - API key authentication with SHA-256 hashing for REST API
 - Rate limiting on API endpoints
 - All data stays local — no cloud dependency
+
+See [docs/deployment.md](docs/deployment.md) for the full security model and host hardening.
 
 ---
 
