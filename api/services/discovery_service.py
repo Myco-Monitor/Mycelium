@@ -68,11 +68,17 @@ class DeviceDiscoveryService:
                 info = zc.get_service_info(type_, name)
                 if info is None:
                     return
-                hostname = name.split(".")[0]
-                # Match spore-NNNN or hyphae-NNNN
-                if re.match(r"spore-\d{4}$", hostname):
+                # The spore-NNNN / hyphae-NNNN identity is the mDNS HOSTNAME
+                # (A record), exposed as info.server -- NOT the service instance
+                # name, which the firmware sets to a generic label
+                # ("Myco-Monitor Spore" / "Myco-Monitor Hyphae"). Parsing the
+                # instance name here would reject every real device.
+                server = (info.server or "").rstrip(".")  # e.g. "spore-1234.local"
+                label = server.split(".")[0]  # e.g. "spore-1234"
+                # Match spore-NNNN or hyphae-NNNN (case-insensitive)
+                if re.match(r"spore-\d{4}$", label, re.IGNORECASE):
                     device_type = "spore"
-                elif re.match(r"hyphae-\d{4}$", hostname):
+                elif re.match(r"hyphae-\d{4}$", label, re.IGNORECASE):
                     device_type = "hyphae"
                 else:
                     return
@@ -80,10 +86,10 @@ class DeviceDiscoveryService:
                 # Require a resolved address to confirm the service is live,
                 # but address devices by mDNS hostname (not the raw IP).
                 if info.parsed_addresses():
-                    discovered[hostname] = {
+                    discovered[label] = {
                         "device_type": device_type,
-                        "hostname": f"{hostname}.local",
-                        "device_name": hostname,
+                        "hostname": server,
+                        "device_name": label,
                         "port": info.port,
                         "discovered_via": "mdns",
                     }

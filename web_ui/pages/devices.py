@@ -139,7 +139,7 @@ def store_complete_spore_device_data(ip: str, room_id) -> Dict:
     device_name = (
         config.get("device_name")
         or info.get("device_name")
-        or f"Spore-{ip.split('.')[-1]}"
+        or ip.split(":")[0]  # fall back to the hostname (e.g. spore-1234.local)
     )
     mac = info.get("mac_address") or discover_mac_address(ip) or "unknown"
     firmware = info.get("firmware_version") or config.get("firmware_version", "")
@@ -171,7 +171,7 @@ def store_complete_hyphae_device_data(ip: str, room_id, pin=None) -> Dict:
     info = fetch_hyphae_config(ip) or {}
     relay = fetch_hyphae_relay_config(ip)
 
-    device_name = info.get("device_name") or f"Hyphae-{ip.split('.')[-1]}"
+    device_name = info.get("device_name") or ip.split(":")[0]  # fall back to hostname
     mac = info.get("mac_address") or discover_mac_address(ip) or "unknown"
     firmware = info.get("firmware_version", "")
 
