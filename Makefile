@@ -1,7 +1,7 @@
 # Mycelium Project Makefile
 # Simple commands for common development tasks
 
-.PHONY: help setup run test clean dev install reset
+.PHONY: help setup setup-conda setup-venv setup-existing setup-dev reset run dev clean clean-env
 
 # Default target
 help:
@@ -22,11 +22,6 @@ help:
 	@echo "  make run            - Start the application"
 	@echo "  make dev            - Start in development mode"
 	@echo ""
-	@echo "Testing:"
-	@echo "  make test           - Run setup tests"
-	@echo "  make test-v         - Run tests with verbose output"
-	@echo "  make quick-test     - Run quick compatibility test"
-	@echo ""
 	@echo "Maintenance:"
 	@echo "  make clean          - Clean up temporary files"
 	@echo "  make clean-env      - Remove mycelium environment"
@@ -35,32 +30,32 @@ help:
 # Interactive setup (prompts for environment choice)
 setup:
 	@echo "🔧 Setting up Mycelium project (interactive)..."
-	python setup.py --sample-data
+	python setup.py
 
 # Setup with conda environment
 setup-conda:
 	@echo "🐍 Setting up Mycelium with conda environment..."
-	python setup.py --env-type conda --sample-data
+	python setup.py --env-type conda
 
 # Setup with virtual environment
 setup-venv:
 	@echo "🐍 Setting up Mycelium with virtual environment..."
-	python setup.py --env-type venv --sample-data
+	python setup.py --env-type venv
 
 # Setup using current environment
 setup-existing:
 	@echo "🐍 Setting up Mycelium with current environment..."
-	python setup.py --env-type existing --sample-data
+	python setup.py --env-type existing
 
 # Setup with development dependencies
 setup-dev:
 	@echo "🛠️  Setting up Mycelium for development..."
-	python setup.py --dev --sample-data
+	python setup.py --dev
 
 # Reset database
 reset:
 	@echo "⚠️  Resetting database..."
-	python setup.py --env-type existing --reset-db --sample-data
+	python setup.py --env-type existing --reset-db
 
 # Run the application
 run:
@@ -71,21 +66,6 @@ run:
 dev:
 	@echo "🚀 Starting Mycelium in development mode..."
 	python run.py --dev
-
-# Run tests
-test:
-	@echo "🧪 Running tests..."
-	python test_setup.py
-
-# Run tests with verbose output
-test-v:
-	@echo "🧪 Running tests (verbose)..."
-	python test_setup.py --verbose
-
-# Run quick compatibility test
-quick-test:
-	@echo "⚡ Running quick compatibility test..."
-	python quick_start.py --test-only
 
 # Clean up temporary files
 clean:

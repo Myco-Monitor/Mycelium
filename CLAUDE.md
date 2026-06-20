@@ -15,7 +15,6 @@ Mycelium is the central data processing, device control, and visualization platf
 - **Device Communication**: aiohttp with HTTPS (CSP CA cert), mDNS discovery (zeroconf)
 - **Charting**: Plotly via `ui.plotly()`
 - **Email**: Python smtplib (stdlib) for SMTP alert notifications
-- **Testing**: pytest with mock device servers
 
 ## Directory Structure
 
@@ -29,7 +28,7 @@ Mycelium/
 │   │   ├── weather_client.py   # OpenWeatherMap client
 │   │   └── pressure_client.py  # Pressure data client
 │   ├── services/               # Business logic services
-│   │   ├── discovery_service.py         # mDNS + CIDR device discovery
+│   │   ├── discovery_service.py         # mDNS device discovery
 │   │   ├── polling_service.py           # Background data collection
 │   │   ├── ota_service.py               # Two-phase OTA upload orchestration
 │   │   ├── email_service.py             # SMTP email notifications
@@ -67,10 +66,9 @@ Mycelium/
 │   ├── initialize_database.py
 │   └── db_utils.py             # SQLite utilities
 ├── config/
-│   ├── app_config.json         # App config (port 8051, TLS, discovery)
+│   ├── app_config.json         # App config (app: port/host/debug, polling intervals)
 │   └── ca_root.pem             # MycoMonitor CA root certificate
 ├── data/                       # SQLite DB, firmware binaries, exports
-├── tests/                      # pytest tests
 ├── run.py                      # Entry point
 ├── setup.py                    # Setup script
 └── requirements.txt            # Dependencies
@@ -147,15 +145,20 @@ The NiceGUI UI package is `web_ui/` (not `ui/`) because `ui` conflicts with `fro
 
 ## Configuration
 
-`config/app_config.json`:
+`config/app_config.json` (only `app` and `polling` are read by code):
 ```json
 {
-  "app": { "name": "Mycelium Farm Monitor", "version": "2.0.0", "port": 8051 },
-  "tls": { "ca_cert_path": "config/ca_root.pem", "verify_ssl": true },
-  "discovery": { "mdns_enabled": true, "cidr_fallback": true, "scan_port": 443 },
-  "devices": { "polling_interval_seconds": 30, "timeout_seconds": 10 }
+  "app": { "name": "Mycelium Farm Monitor", "debug": true, "host": "127.0.0.1", "port": 8051 },
+  "polling": {
+    "spore":   { "interval": 60,   "jitter": 5,  "backoff_factor": 2, "max_backoff": 3600,  "enabled": true },
+    "hyphae":  { "interval": 60,   "jitter": 5,  "backoff_factor": 2, "max_backoff": 3600,  "enabled": true },
+    "weather": { "interval": 1800, "jitter": 60, "backoff_factor": 2, "max_backoff": 14400, "enabled": true },
+    "pressure":{ "interval": 300,  "jitter": 30, "backoff_factor": 2, "max_backoff": 3600,  "enabled": true },
+    "alerts":  { "interval": 60,   "jitter": 5,  "enabled": true }
+  }
 }
 ```
+App version is not in config — it lives in `version.py` (`__version__`). TLS (CA cert path), mDNS, and the 443 scan port are currently hardcoded in code, not config.
 
 ## Device Communication
 
