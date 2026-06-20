@@ -1,11 +1,11 @@
 # Mycelium Project Dependencies
 
-# Core Web Framework (NiceGUI replaces Dash)
+# Core Web Framework (NiceGUI bundles FastAPI + Uvicorn)
 nicegui>=2.0.0
+fastapi>=0.110.0
 plotly>=5.17.0
 
-# Authentication & Security
-werkzeug>=2.3.7
+# Security
 cryptography>=41.0.0
 
 # Database
@@ -13,7 +13,8 @@ cryptography>=41.0.0
 
 # Data Processing
 pandas>=2.0.0,<2.3.0
-numpy>=1.24.0,<2.0.0
+numpy>=1.24.0,<2.0.0  # transitive dep of pandas; pinned <2.0 for compatibility
+openpyxl>=3.1.0  # Excel export (api/services/export_service.py)
 
 # HTTP Requests & Async
 requests>=2.31.0
@@ -21,21 +22,3 @@ aiohttp>=3.9.0
 
 # Device Discovery
 zeroconf>=0.131.0
-
-# Development & Testing
-pytest>=7.4.0
-pytest-cov>=4.1.0
-pytest-asyncio>=0.21.0
-
-# Retry logic
-backoff>=2.2.1
-
-# Analytics and Jupyter Integration (optional)
-# jupyter>=1.0.0
-# jupyterlab>=4.0.0
-# notebook>=7.0.0
-# matplotlib>=3.5.0
-# seaborn>=0.11.0
-# scikit-learn>=1.3.0
-# scipy>=1.11.3
-# ipywidgets>=8.0.0

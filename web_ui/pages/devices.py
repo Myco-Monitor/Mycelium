@@ -1644,7 +1644,7 @@ def _mini_stat(label: str, value: str, accent: str):
 
 
 async def _run_mdns_discovery(colors: dict, stat_cards=None):
-    """Run mDNS + CIDR discovery and display results in a dialog."""
+    """Run mDNS discovery and display results in a dialog."""
     rooms = _room_options()
 
     with ui.dialog() as dlg, ui.card().classes("p-4 min-w-96"):

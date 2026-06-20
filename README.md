@@ -69,8 +69,7 @@ Mycelium/
 ├── api/
 │   ├── clients/            # HTTP clients for device communication (HTTPS + mDNS)
 │   ├── services/           # Business logic, OTA, discovery, weather, email, etc.
-│   ├── rest_api_fastapi.py # FastAPI REST API router
-│   └── rest_api.py         # Legacy Flask REST API (kept during migration)
+│   └── rest_api_fastapi.py # FastAPI REST API router
 ├── web_ui/                 # NiceGUI web application
 │   ├── app.py              # App entry point, middleware, lifecycle
 │   ├── theme.py            # 8-color theme system + dark/light mode

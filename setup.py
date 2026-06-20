@@ -252,18 +252,18 @@ def create_requirements_file():
     requirements = [
         # Core Web Framework (NiceGUI bundles FastAPI + Uvicorn)
         "nicegui>=2.0.0",
+        "fastapi>=0.110.0",
         "plotly>=5.17.0",
         # Data Processing
         "pandas>=2.0.0,<2.3.0",
         "numpy>=1.24.0,<2.0.0",
+        "openpyxl>=3.1.0",
         # Security
         "cryptography>=41.0.0",
-        "werkzeug>=2.3.7",
         # Device Communication
         "requests>=2.31.0",
         "aiohttp>=3.9.0",
         "zeroconf>=0.131.0",
-        "backoff>=2.2.1",
     ]
 
     req_file = project_root / "requirements.txt"
@@ -318,7 +318,13 @@ def create_config_files():
     config_dir = project_root / "config"
     config_dir.mkdir(exist_ok=True)
 
-    # Create app configuration
+    # Create app configuration only if one is not already shipped/present.
+    # The repo ships config/app_config.json; don't clobber it on setup.
+    config_file = config_dir / "app_config.json"
+    if config_file.exists():
+        print(f"✅ Config already present: {config_file}")
+        return
+
     app_config = {
         "app": {
             "name": "Mycelium Farm Monitor",
@@ -326,20 +332,9 @@ def create_config_files():
             "debug": True,
             "host": "127.0.0.1",
             "port": 8051,
-        },
-        "database": {"path": "data/mycelium.db", "backup_interval_hours": 24},
-        "security": {
-            "secret_key": "your-secret-key-change-in-production",
-            "session_timeout_minutes": 60,
-        },
-        "devices": {
-            "discovery_enabled": True,
-            "polling_interval_seconds": 30,
-            "timeout_seconds": 10,
-        },
+        }
     }
 
-    config_file = config_dir / "app_config.json"
     with open(config_file, "w") as f:
         json.dump(app_config, f, indent=2)
 
@@ -368,9 +363,6 @@ def validate_installation():
         "cryptography",
     ]
 
-    # Check analytics modules
-    analytics_modules = ["matplotlib", "seaborn", "sklearn", "scipy"]
-
     missing_modules = []
     for module in required_modules:
         try:
@@ -380,23 +372,9 @@ def validate_installation():
             missing_modules.append(module)
             print(f"❌ {module} missing")
 
-    # Check analytics modules (optional but recommended)
-    missing_analytics = []
-    for module in analytics_modules:
-        try:
-            __import__(module)
-            print(f"✅ {module} installed (analytics)")
-        except ImportError:
-            missing_analytics.append(module)
-            print(f"⚠️  {module} missing (analytics - optional)")
-
     if missing_modules:
         print(f"❌ Missing required modules: {', '.join(missing_modules)}")
         return False
-
-    if missing_analytics:
-        print(f"⚠️  Missing analytics modules: {', '.join(missing_analytics)}")
-        print("   Analytics features may be limited. Run setup again to install.")
 
     # Check database
     db_path = project_root / "data" / "mycelium.db"
