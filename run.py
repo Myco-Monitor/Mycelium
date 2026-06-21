@@ -193,7 +193,7 @@ def start_nicegui(
         ui.run(
             host=host,
             port=port,
-            title="Mycelium - Mushroom Farm Monitor",
+            title="Mycelium - Myco-Monitor",
             favicon=str(FAVICON) if FAVICON.exists() else None,
             reload=dev,
             show=False,
