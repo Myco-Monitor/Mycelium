@@ -146,16 +146,16 @@ Mycelium/
    conda activate mycelium
    ```
 
-4. **Start the application:**
+4. **Start the application** — HTTPS is the default:
 
-   Local use, same machine (plain HTTP on loopback):
+   Local use, same machine:
    ```bash
    python run.py
    ```
 
-   Over the network (HTTPS + reachable by name) — **recommended for real use:**
+   Over the network (reachable from other devices) — **recommended for real use:**
    ```bash
-   python run.py --https --host 0.0.0.0
+   python run.py --host 0.0.0.0
    ```
    Serves HTTPS on port 8443, encrypts logins, auto-generates a self-signed
    certificate on first run, and advertises `mycelium.local` over mDNS so any
@@ -166,17 +166,22 @@ Mycelium/
    python run.py --dev
    ```
 
+   > Plain HTTP is available with `--http` (e.g. `python run.py --http`) but it
+   > sends logins in the clear — **avoid it** except for throwaway local testing.
+
 5. **Open your browser** — *where* you open it depends on how you started the app:
 
    | How you started it | Open the browser on… | URL |
    |--------------------|----------------------|-----|
-   | `python run.py` (local) | the **same machine** running Mycelium | `http://localhost:8051` |
-   | `python run.py --https --host 0.0.0.0` (network) | **any device on the same network**, including the host itself — e.g. a phone, tablet, or another computer | `https://mycelium.local:8443` (or `https://<mycelium-host-ip>:8443`) |
+   | `python run.py` — HTTPS, **recommended** ✅ | the **same machine** running Mycelium | `https://localhost:8443` (or `https://127.0.0.1:8443`) |
+   | `python run.py --http` — plaintext, **avoid** ⚠️ | the **same machine** running Mycelium | `http://localhost:8051` (or `http://127.0.0.1:8051`) |
+   | `python run.py --host 0.0.0.0` — HTTPS on the LAN, **recommended** ✅ | **any device on the same network** (phone, tablet, another computer) | `https://mycelium.local:8443` (or `https://<mycelium-host-ip>:8443`) |
+   | `python run.py --http --host 0.0.0.0` — plaintext, **avoid** ⚠️ | **any device on the same network** | `http://<mycelium-host-ip>:8051` |
 
-   > **Local mode is loopback-only:** `python run.py` binds to `127.0.0.1`, so the
-   > UI is reachable **only from the machine running Mycelium** — other devices
-   > can't connect to it. To reach Mycelium from a different device (phone, laptop,
-   > etc.), start it in network mode (`--https --host 0.0.0.0`).
+   > **Default (`--host 127.0.0.1`) is loopback-only:** the UI is reachable **only
+   > from the machine running Mycelium** — other devices can't connect. To reach
+   > Mycelium from a different device (phone, laptop, etc.), start it with
+   > `--host 0.0.0.0`.
    >
    > First HTTPS run generates a per-install **local CA**. On **each device you
    > browse from**, import `config/mycelium_local_ca.pem` into the browser once
@@ -192,17 +197,18 @@ python run.py [OPTIONS]
 
 Options:
   --host HOST     Interface to bind to (default: 127.0.0.1; use 0.0.0.0 for the LAN)
-  --port PORT     Port to bind to (default: 8051 HTTP / 8443 HTTPS)
+  --port PORT     Port to bind to (default: 8443 HTTPS / 8051 with --http)
   --debug         Enable debug mode
   --dev           Development mode (hot reload, verbose logging)
-  --https         Serve over HTTPS/TLS (self-signed cert auto-generated)
-  --cert PATH     TLS certificate (PEM); implies --https
+  --http          Serve over plain HTTP instead of HTTPS (INSECURE)
+  --cert PATH     TLS certificate (PEM); implies HTTPS
   --key PATH      TLS private key (PEM)
 ```
 
-For network deployments, run with `--https` to encrypt logins and reach the UI at
-`https://mycelium.local:8443`. See [docs/deployment.md](docs/deployment.md) for the
-full security model (TLS, secrets at rest, host hardening).
+For network deployments, run with `--host 0.0.0.0` and reach the UI at
+`https://mycelium.local:8443`. HTTPS is on by default, so logins are encrypted; see
+[docs/deployment.md](docs/deployment.md) for the full security model (TLS, secrets
+at rest, host hardening).
 
 ---
 
@@ -240,8 +246,8 @@ Application settings are in `config/app_config.json`:
 
 ## Security
 
-- **Optional HTTPS for the web UI** (`--https`) — per-install local CA you import
-  once (mkcert-style), or bring your own cert
+- **HTTPS for the web UI on by default** (opt out with `--http`) — per-install
+  local CA you import once (mkcert-style), or bring your own cert
 - HTTPS-only device communication using CSP-provisioned certificates (`ca_root.pem`)
 - **Secrets encrypted at rest** — device PINs, SMTP password, and OWM API key via
   Fernet; session-signing key auto-generated per install (no secrets to set by hand)

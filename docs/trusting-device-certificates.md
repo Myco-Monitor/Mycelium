@@ -20,9 +20,9 @@ Two important differences between them:
 - The **Myco-Monitor CA** ships with Mycelium and is the same for everyone — its
   fingerprint is fixed (below).
 - The **Mycelium web-UI CA** is generated **locally** the first time you run
-  `python run.py --https`, so it's **unique to your install**. It only exists if
-  you serve Mycelium over HTTPS, and its fingerprint is printed at startup (verify
-  with `openssl`, see [docs/deployment.md](deployment.md)).
+  `python run.py` (HTTPS is the default), so it's **unique to your install**. It
+  only exists if you serve Mycelium over HTTPS, and its fingerprint is printed at
+  startup (verify with `openssl`, see [docs/deployment.md](deployment.md)).
 
 > Note: this is about trusting pages **in your browser**. The Mycelium *app*
 > already trusts your devices internally via the bundled

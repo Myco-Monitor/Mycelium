@@ -4,7 +4,7 @@ How Mycelium secures data, and what you (or an end user) need to do at deploy ti
 
 ## TL;DR
 
-- **Browser ↔ Mycelium:** run with `--https` (or `"https": true` in config). A
+- **Browser ↔ Mycelium:** HTTPS is the default (opt out with `--http`). A
   self-signed cert is auto-generated on first run; the UI is served on **8443**.
 - **Secrets at rest:** the session key, SMTP password, and OWM API key are
   auto-generated/encrypted into the gitignored `data/` dir. **The user creates no
@@ -16,15 +16,15 @@ How Mycelium secures data, and what you (or an end user) need to do at deploy ti
 
 ## 1. HTTPS for the web UI
 
-Mycelium serves plain HTTP on loopback by default (fine for same-machine use).
-To encrypt logins/sessions over the network:
+Mycelium serves HTTPS by default, so logins/sessions are encrypted out of the box:
 
 ```bash
-python run.py --https            # serves https://<host>:8443, self-signed cert
-python run.py --https --host 0.0.0.0   # reachable across the LAN
+python run.py                    # serves https://localhost:8443, self-signed cert
+python run.py --host 0.0.0.0     # reachable across the LAN
+python run.py --http             # plain HTTP (INSECURE) — avoid except local testing
 ```
 
-On first `--https` run, Mycelium generates a **per-install local CA** and issues
+On first run, Mycelium generates a **per-install local CA** and issues
 the web-server (leaf) cert from it — the same model as
 [mkcert](https://github.com/FiloSottile/mkcert). Files land in `config/`
 (gitignored, keys `0600`):

@@ -6,15 +6,18 @@ This script starts the Mycelium web application (NiceGUI + FastAPI).
 
 Usage:
     python run.py [--host HOST] [--port PORT] [--debug] [--dev]
-                  [--https] [--cert PATH] [--key PATH]
+                  [--http] [--cert PATH] [--key PATH]
+
+HTTPS is the default (self-signed cert auto-generated on first run). Use --http
+only if you explicitly want an insecure plaintext server.
 
 Options:
-    --host HOST     Host to bind to (default: 127.0.0.1)
-    --port PORT     Port to bind to (default: 8051 HTTP / 8443 HTTPS)
+    --host HOST     Interface to bind to (default: 127.0.0.1; use 0.0.0.0 for LAN)
+    --port PORT     Port to bind to (default: 8443 HTTPS / 8051 with --http)
     --debug         Enable debug mode
     --dev           Development mode (auto-reload, verbose logging)
-    --https         Serve over HTTPS/TLS (self-signed cert auto-generated)
-    --cert PATH     TLS certificate (PEM); implies --https. Default: self-signed
+    --http          Serve over plain HTTP instead of HTTPS (INSECURE)
+    --cert PATH     TLS certificate (PEM). Default: auto self-signed in config/
     --key PATH      TLS private key (PEM)
 """
 
@@ -219,7 +222,10 @@ def main():
         help="Interface to bind to (default: 127.0.0.1; use 0.0.0.0 for the whole LAN)",
     )
     parser.add_argument(
-        "--port", type=int, default=None, help="Port to bind to (default: 8051)"
+        "--port",
+        type=int,
+        default=None,
+        help="Port to bind to (default: 8443 for HTTPS, 8051 with --http)",
     )
     parser.add_argument("--debug", action="store_true", help="Enable debug mode")
     parser.add_argument(
@@ -228,14 +234,21 @@ def main():
         help="Development mode (auto-reload, verbose logging)",
     )
     parser.add_argument(
+        "--http",
+        action="store_true",
+        help="Serve over plain HTTP instead of HTTPS (INSECURE; logins are sent "
+        "in the clear). HTTPS is the default.",
+    )
+    parser.add_argument(
         "--https",
         action="store_true",
-        help="Serve over HTTPS/TLS (default port 8443; self-signed cert auto-generated)",
+        help="Serve over HTTPS/TLS. This is the default; the flag is accepted for "
+        "compatibility and has no effect on its own.",
     )
     parser.add_argument(
         "--cert",
         default=None,
-        help="Path to a TLS certificate (PEM). Implies --https. "
+        help="Path to a TLS certificate (PEM). Implies HTTPS. "
         "Default: auto self-signed in config/.",
     )
     parser.add_argument(
@@ -247,7 +260,14 @@ def main():
     config = load_config()
     app_config = config.get("app", {})
 
-    https = args.https or bool(args.cert) or app_config.get("https", False)
+    # Secure by default: HTTPS unless explicitly opted out with --http (or the
+    # config's "http": true). Supplying a cert/key always forces HTTPS.
+    if args.cert or args.key:
+        https = True
+    elif args.http or app_config.get("http", False):
+        https = False
+    else:
+        https = True
 
     host = args.host or app_config.get("host", "127.0.0.1")
     if args.port:
@@ -270,7 +290,7 @@ def main():
         print("")
         print("--host is the interface to listen on, not the address browsers use.")
         print("To serve over the network and be reachable as mycelium.local, run:")
-        print("    python run.py --https --host 0.0.0.0")
+        print("    python run.py --host 0.0.0.0")
         print("then open https://mycelium.local:8443 from any computer on the LAN.")
         return 1
 

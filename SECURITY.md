@@ -31,7 +31,7 @@ To help us triage quickly, please include where practical:
 
 - A description of the issue and its impact.
 - The Mycelium version (see `version.py`) and how you run it
-  (loopback only, `--https` on the LAN, Raspberry Pi, etc.).
+  (loopback only, `--host 0.0.0.0` on the LAN, Raspberry Pi, etc.).
 - Steps to reproduce, a proof of concept, or affected file/endpoint.
 - Any suggested remediation.
 
@@ -62,14 +62,14 @@ Out of scope:
   permissions — see below).
 - Spore/Hyphae firmware vulnerabilities (reported via their own repositories).
 - Findings against deployments that ignore the documented hardening guidance
-  (for example, binding to `0.0.0.0` without `--https`).
+  (for example, binding to `0.0.0.0` with `--http` instead of the default HTTPS).
 
 ## Security Model (summary)
 
 Mycelium is designed to run locally and keep all data on the operator's machine:
 
-- **Optional HTTPS for the web UI** (`--https`) using a per-install local CA you
-  import once (mkcert-style), or a certificate you supply.
+- **HTTPS for the web UI on by default** (opt out with `--http`) using a
+  per-install local CA you import once (mkcert-style), or a certificate you supply.
 - **HTTPS-only device communication** using CSP-provisioned device certificates
   (`config/ca_root.pem`).
 - **Secrets encrypted at rest** — device PINs, the SMTP password, and the

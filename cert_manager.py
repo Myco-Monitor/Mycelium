@@ -1,7 +1,7 @@
 """TLS certificate management for the Mycelium web server.
 
-Uses a per-install **local CA** model (like mkcert): on first ``--https`` run
-Mycelium generates a small local CA, then issues the web-server (leaf) cert from
+Uses a per-install **local CA** model (like mkcert): on the first HTTPS run
+(the default) Mycelium generates a small local CA, then issues the web-server (leaf) cert from
 it. The user imports the local CA cert **once** into their browser/OS trust
 store -- the same way ``ca_root.pem`` is trusted -- and then gets warning-free
 HTTPS that survives leaf-cert regeneration.
