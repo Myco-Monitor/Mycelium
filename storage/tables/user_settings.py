@@ -6,7 +6,10 @@ in the Mycelium database. It includes authentication-related fields and function
 """
 
 from typing import Dict, List, Optional, Any
+import base64
 import hashlib
+import hmac
+import os
 
 from storage import crypto
 from storage.db_utils import (
@@ -282,45 +285,59 @@ def delete_farm_user_settings(farm_id: int) -> int:
     return execute_update(query, (farm_id,))
 
 
+# Password hashing: PBKDF2-HMAC-SHA256 with a per-user random salt. The hash is
+# stored self-describing ("algo$iterations$salt_b64$hash_b64") so the parameters
+# travel with it and can be raised over time without breaking existing hashes.
+_PBKDF2_ALGO = "pbkdf2_sha256"
+_PBKDF2_ITERATIONS = 600_000  # OWASP-recommended floor for PBKDF2-HMAC-SHA256
+_SALT_BYTES = 16
+
+
 def hash_password(password: str) -> str:
     """
-    Hash a password with a salt.
+    Hash a password with PBKDF2-HMAC-SHA256 and a per-user random salt.
 
     Args:
         password (str): Password to hash
 
     Returns:
-        str: Hashed password
+        str: Self-describing hash "pbkdf2_sha256$iterations$salt_b64$hash_b64"
     """
-    # Use fixed salt for all passwords
-    salt = "MycoMonitor2025"
-
-    # Combine password and salt
-    salted_password = password + salt
-
-    # Create SHA-256 hash
-    hash_obj = hashlib.sha256(salted_password.encode())
-
-    # Return hexadecimal digest
-    return hash_obj.hexdigest()
+    salt = os.urandom(_SALT_BYTES)
+    derived = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, _PBKDF2_ITERATIONS)
+    return "{}${}${}${}".format(
+        _PBKDF2_ALGO,
+        _PBKDF2_ITERATIONS,
+        base64.b64encode(salt).decode(),
+        base64.b64encode(derived).decode(),
+    )
 
 
 def verify_password(password: str, stored_hash: str) -> bool:
     """
-    Verify a password against a stored hash.
+    Verify a password against a stored PBKDF2 hash in constant time.
 
     Args:
         password (str): Password to verify
-        stored_hash (str): Stored hash to compare against
+        stored_hash (str): Stored hash produced by hash_password()
 
     Returns:
         bool: True if password matches, False otherwise
     """
-    # Hash the provided password
-    password_hash = hash_password(password)
-
-    # Compare with stored hash
-    return password_hash == stored_hash
+    if not stored_hash:
+        return False
+    try:
+        algo, iter_s, salt_b64, hash_b64 = stored_hash.split("$")
+        if algo != _PBKDF2_ALGO:
+            return False
+        iterations = int(iter_s)
+        salt = base64.b64decode(salt_b64)
+        expected = base64.b64decode(hash_b64)
+    except (ValueError, TypeError):
+        # Malformed/legacy hash -- not a valid PBKDF2 token, so it cannot match.
+        return False
+    derived = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, iterations)
+    return hmac.compare_digest(derived, expected)
 
 
 def get_user_by_username(user_name: str) -> Optional[Dict[str, Any]]:
@@ -367,3 +384,17 @@ def count_users() -> int:
     query = "SELECT COUNT(*) FROM user_settings"
     results = execute_query(query, ())
     return results[0]["COUNT(*)"] if results else 0
+
+
+def count_admins() -> int:
+    """
+    Count the number of users with the admin role.
+
+    Used to prevent locking everyone out by deleting or demoting the last admin.
+
+    Returns:
+        int: Number of admin users
+    """
+    query = "SELECT COUNT(*) AS n FROM user_settings WHERE user_role = 'admin'"
+    results = execute_query(query, ())
+    return results[0]["n"] if results else 0

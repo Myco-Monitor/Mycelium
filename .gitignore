@@ -53,3 +53,6 @@ REFACTOR_PLAN.md
 
 # Build artifacts
 activate_mycelium.sh
+
+# Local-only pre-push scan (not shipped)
+check.sh

@@ -10,7 +10,16 @@ Farm and room management has been moved to the Farm Overview page.
 from nicegui import ui, app, run
 from web_ui.layout import page_layout, back_to_dashboard
 from web_ui.theme import get_colors
-from storage.tables.user_settings import get_user_setting, update_user_setting
+from web_ui.auth import is_admin
+from storage.tables.user_settings import (
+    get_user_setting,
+    update_user_setting,
+    get_all_user_settings,
+    create_user_setting,
+    delete_user_setting,
+    get_user_by_username,
+    count_admins,
+)
 
 US_TIMEZONES = [
     "US/Eastern",
@@ -28,6 +37,122 @@ def _readonly_field(label: str, value: str, hint: str = ""):
     ui.input(value=value).props("readonly outlined dense").classes("w-full")
     if hint:
         ui.label(hint).classes("text-muted text-caption")
+
+
+@ui.refreshable
+def user_admin_section(current_uid: int):
+    """Admin-only user management: list accounts, add, delete, and change roles.
+
+    Lockout protection: an admin cannot delete their own account, and the last
+    remaining admin can neither be deleted nor demoted (the section is only
+    rendered for admins, and every action re-checks these rules server-side).
+    """
+    with ui.card().classes("w-full"):
+        ui.label("User Management").classes("text-h5 q-mb-xs")
+        ui.label("Add, remove, and set roles for accounts. Admin only.").classes(
+            "text-muted text-caption q-mb-md"
+        )
+
+        users = get_all_user_settings()
+        admin_count = count_admins()
+
+        with ui.element("div").style(
+            "display:grid; grid-template-columns: 2fr 1fr auto; "
+            "gap:8px 12px; align-items:center; width:100%;"
+        ):
+            ui.label("Username").classes("text-weight-bold")
+            ui.label("Role").classes("text-weight-bold")
+            ui.label("")  # actions column header (spacer)
+
+            for u in users:
+                uid_u = u["user_id"]
+                is_self = uid_u == current_uid
+                was_admin = (u.get("user_role") or "user") == "admin"
+                last_admin = was_admin and admin_count <= 1
+
+                ui.label(u.get("user_name", ""))
+
+                role_sel = (
+                    ui.select(
+                        options=["user", "admin"], value=u.get("user_role") or "user"
+                    )
+                    .props("dense outlined")
+                    .classes("w-32")
+                )
+
+                def _change_role(
+                    e, target_id=uid_u, sel=role_sel, target_was_admin=was_admin
+                ):
+                    new_role = sel.value
+                    if target_was_admin and new_role != "admin" and count_admins() <= 1:
+                        ui.notify("Cannot demote the last admin.", type="negative")
+                        sel.value = "admin"
+                        return
+                    update_user_setting(target_id, user_role=new_role)
+                    ui.notify("Role updated.", type="positive")
+                    user_admin_section.refresh()
+
+                role_sel.on("update:model-value", _change_role)
+
+                def _delete(
+                    target_id=uid_u,
+                    name=u.get("user_name", ""),
+                    self_row=is_self,
+                    target_was_admin=was_admin,
+                ):
+                    if self_row:
+                        ui.notify(
+                            "You cannot delete your own account.", type="negative"
+                        )
+                        return
+                    if target_was_admin and count_admins() <= 1:
+                        ui.notify("Cannot delete the last admin.", type="negative")
+                        return
+                    delete_user_setting(target_id)
+                    ui.notify(f"Deleted '{name}'.", type="positive")
+                    user_admin_section.refresh()
+
+                del_btn = ui.button(
+                    icon="delete", on_click=lambda _, h=_delete: h()
+                ).props("flat dense color=negative")
+                if is_self or last_admin:
+                    del_btn.disable()  # UX hint; handler still enforces the rule
+
+        ui.separator().classes("q-my-md")
+
+        # ---- Add user ----
+        ui.label("Add User").classes("text-weight-bold q-mb-xs")
+        new_name = ui.input("Username").props("dense outlined").classes("w-full")
+        new_pw = (
+            ui.input("Password", password=True, password_toggle_button=True)
+            .props("dense outlined")
+            .classes("w-full q-mt-sm")
+        )
+        new_role = (
+            ui.select(options=["user", "admin"], value="user", label="Role")
+            .props("dense outlined")
+            .classes("w-full q-mt-sm")
+        )
+
+        def _add_user():
+            name = (new_name.value or "").strip()
+            pw = new_pw.value or ""
+            if len(name) < 3:
+                ui.notify("Username must be at least 3 characters.", type="negative")
+                return
+            if len(pw) < 6:
+                ui.notify("Password must be at least 6 characters.", type="negative")
+                return
+            if get_user_by_username(name):
+                ui.notify("Username already exists.", type="negative")
+                return
+            create_user_setting(name, pw, user_role=new_role.value)
+            ui.notify(f"User '{name}' created.", type="positive")
+            user_admin_section.refresh()
+
+        ui.button("Add User", icon="person_add", on_click=_add_user).props(
+            "color=primary"
+        ).classes("q-mt-sm")
 
 
 @ui.page("/settings")
@@ -313,6 +438,10 @@ def settings_page():
             ui.button("Send Test Email", icon="email", on_click=_test_email).props(
                 "outline"
             ).classes("q-mt-xs")
+
+        # ---- Section 6: User Management (admin only) ----
+        if is_admin():
+            user_admin_section(uid)
 
         # Auto-save note
         ui.label("Most settings auto-save on change").classes(

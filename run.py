@@ -31,6 +31,9 @@ if str(project_root) not in sys.path:
 
 from version import __version__
 
+# Shared Myco-Monitor favicon (same icon used by the Spore/Hyphae web UIs).
+FAVICON = project_root / "web_ui" / "assets" / "favicon.ico"
+
 
 def load_config():
     """Load application configuration."""
@@ -188,6 +191,7 @@ def start_nicegui(
             host=host,
             port=port,
             title="Mycelium - Mushroom Farm Monitor",
+            favicon=str(FAVICON) if FAVICON.exists() else None,
             reload=dev,
             show=False,
             storage_secret=get_or_create_storage_secret(),

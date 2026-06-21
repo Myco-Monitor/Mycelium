@@ -57,6 +57,21 @@ async def _handle_toggle():
     ui.navigate.reload()
 
 
+def is_admin() -> bool:
+    """True if the logged-in user currently holds the admin role.
+
+    DB-authoritative (re-reads the role rather than trusting the session), so a
+    role change or deletion takes effect without forcing a re-login.
+    """
+    uid = app.storage.user.get("user_id")
+    if not uid:
+        return False
+    from storage.tables.user_settings import get_user_setting
+
+    info = get_user_setting(uid)
+    return bool(info and info.get("user_role") == "admin")
+
+
 @ui.page("/login")
 def login_page():
     """Login page."""
@@ -96,6 +111,7 @@ def login_page():
                 if user_data:
                     app.storage.user["user_id"] = user_data["user_id"]
                     app.storage.user["username"] = user_data["user_name"]
+                    app.storage.user["role"] = user_data.get("user_role") or "user"
                     ui.navigate.to("/main")
                 else:
                     error_label.text = "Invalid username or password."
@@ -108,14 +124,35 @@ def login_page():
             # Allow Enter key to submit
             password.on("keydown.enter", handle_login)
 
-            with ui.row().classes("full-width justify-center"):
-                ui.label("Don't have an account?").classes("q-mr-xs")
-                ui.link("Sign Up", "/signup").style(f"color: {colors['primary']}")
+            # Self-registration is only for first-run bootstrap. Once an account
+            # exists, accounts are created by an admin (Settings > User
+            # Management), so don't advertise signup.
+            from storage.tables.user_settings import count_users
+
+            if count_users() == 0:
+                with ui.row().classes("full-width justify-center"):
+                    ui.label("Don't have an account?").classes("q-mr-xs")
+                    ui.link("Sign Up", "/signup").style(f"color: {colors['primary']}")
+            else:
+                ui.label("Accounts are created by an administrator.").classes(
+                    "text-caption text-muted full-width text-center"
+                )
 
 
 @ui.page("/signup")
 def signup_page():
-    """Signup page."""
+    """Signup page — first-run bootstrap only.
+
+    Public self-registration is closed once any account exists; further accounts
+    are created by an admin via Settings > User Management. This guards the route
+    directly so it can't be reached by typing the URL.
+    """
+    from storage.tables.user_settings import count_users
+
+    if count_users() > 0:
+        ui.navigate.to("/login")
+        return
+
     apply_theme()
     colors = get_colors()
     _auth_header()
