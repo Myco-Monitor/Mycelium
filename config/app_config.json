@@ -1,7 +1,7 @@
 {
   "app": {
     "name": "Mycelium Farm Monitor",
-    "debug": true,
+    "debug": false,
     "host": "127.0.0.1",
     "port": 8051
   },

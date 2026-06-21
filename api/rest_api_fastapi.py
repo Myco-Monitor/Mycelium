@@ -12,7 +12,7 @@ import hashlib
 import secrets
 import time
 from typing import Optional, Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Request, HTTPException, Depends, Header
 
@@ -117,7 +117,7 @@ async def health_check():
 
     return {
         "status": status,
-        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "devices": {
             "spore": {"total": len(spores), "online": online_spores},
             "hyphae": {"total": len(hyphaes), "online": online_hyphaes},

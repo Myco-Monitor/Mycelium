@@ -637,8 +637,10 @@ def _save_rule(
 
     # For email alerts, a non-blank target must be a valid address. Blank is
     # allowed -- it falls back to the Settings smtp_to address.
-    if notification == "email" and notification_target and not _is_valid_email(
-        notification_target
+    if (
+        notification == "email"
+        and notification_target
+        and not _is_valid_email(notification_target)
     ):
         ui.notify(
             "Enter a valid email address, or leave it blank to use your Settings email",

@@ -31,7 +31,7 @@ import json
 project_root = Path(__file__).parent
 sys.path.append(str(project_root))
 
-from version import __version__
+from version import __version__  # noqa: E402  (after sys.path setup above)
 
 
 def detect_environment_tools():
@@ -113,7 +113,7 @@ def create_conda_environment(env_name):
 
     # Create environment with Python 3.11 for better package compatibility
     cmd = ["conda", "create", "-n", env_name, "python=3.11", "-y"]
-    if not run_command(" ".join(cmd), f"Creating conda environment '{env_name}'"):
+    if not run_command(cmd, f"Creating conda environment '{env_name}'"):
         return False
 
     print(f"✅ Conda environment '{env_name}' ready!")
@@ -140,7 +140,7 @@ def create_venv_environment(env_name):
 
     # Create virtual environment
     cmd = [sys.executable, "-m", "venv", str(env_path)]
-    if not run_command(" ".join(cmd), f"Creating virtual environment '{env_name}'"):
+    if not run_command(cmd, f"Creating virtual environment '{env_name}'"):
         return False
 
     print(f"✅ Virtual environment '{env_name}' ready!")
@@ -187,16 +187,18 @@ def activate_environment_message(env_type, env_name):
         return "# Using current environment"
 
 
-def run_command(command, description=""):
-    """Run a shell command and handle errors."""
+def run_command(args, description=""):
+    """Run a command (a list of argv tokens) without a shell and handle errors.
+
+    Passing argv as a list avoids shell interpolation (no shell=True), so paths
+    or names with spaces/metacharacters can't be misparsed or injected.
+    """
     print(f"{'=' * 60}")
-    print(f"Running: {description or command}")
+    print(f"Running: {description or ' '.join(args)}")
     print(f"{'=' * 60}")
 
     try:
-        result = subprocess.run(
-            command, shell=True, check=True, capture_output=True, text=True
-        )
+        result = subprocess.run(args, check=True, capture_output=True, text=True)
         if result.stdout:
             print(result.stdout)
         return True
@@ -217,16 +219,16 @@ def install_dependencies(python_executable, dev=False):
         print("❌ requirements.txt not found. Creating basic requirements...")
         create_requirements_file()
 
-    # Get pip command for the environment
-    pip_cmd = f"{python_executable} -m pip"
+    # Get pip command for the environment (argv list, not a shell string)
+    pip_cmd = [python_executable, "-m", "pip"]
 
     # Upgrade pip first
-    if not run_command(f"{pip_cmd} install --upgrade pip", "Upgrading pip"):
+    if not run_command(pip_cmd + ["install", "--upgrade", "pip"], "Upgrading pip"):
         print("⚠️  Warning: Failed to upgrade pip, continuing anyway...")
 
     # Install main dependencies
     if not run_command(
-        f"{pip_cmd} install -r requirements.txt", "Installing main dependencies"
+        pip_cmd + ["install", "-r", "requirements.txt"], "Installing main dependencies"
     ):
         return False
 
@@ -240,7 +242,7 @@ def install_dependencies(python_executable, dev=False):
             "mypy>=1.0.0",
         ]
         for dep in dev_deps:
-            if not run_command(f"{pip_cmd} install {dep}", f"Installing {dep}"):
+            if not run_command(pip_cmd + ["install", dep], f"Installing {dep}"):
                 print(f"⚠️  Warning: Failed to install {dep}")
 
     print("✅ Dependencies installed successfully!")
@@ -334,7 +336,7 @@ def create_config_files():
         "app": {
             "name": "Mycelium Farm Monitor",
             "version": __version__,
-            "debug": True,
+            "debug": False,
             "host": "127.0.0.1",
             "port": 8051,
         }

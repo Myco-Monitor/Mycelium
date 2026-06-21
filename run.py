@@ -29,7 +29,7 @@ project_root = Path(__file__).parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
-from version import __version__
+from version import __version__  # noqa: E402  (after sys.path setup above)
 
 # Shared Myco-Monitor favicon (same icon used by the Spore/Hyphae web UIs).
 FAVICON = project_root / "web_ui" / "assets" / "favicon.ico"

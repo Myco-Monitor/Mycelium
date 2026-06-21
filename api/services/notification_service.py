@@ -9,7 +9,7 @@ import logging
 import requests
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 
 from storage.tables import notification_log
@@ -245,7 +245,7 @@ Log in to your dashboard to acknowledge or resolve this alert.
         """
         payload = {
             "event": "alert.triggered",
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             "alert": {
                 "id": alert_id,
                 "rule_name": rule.get("rule_name"),

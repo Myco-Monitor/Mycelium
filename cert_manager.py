@@ -101,7 +101,7 @@ def _load_or_create_local_ca():
             x509.NameAttribute(NameOID.ORGANIZATION_NAME, "Mycelium"),
         ]
     )
-    now = datetime.datetime.utcnow()
+    now = datetime.datetime.now(datetime.timezone.utc)
     ca_cert = (
         x509.CertificateBuilder()
         .subject_name(name)
@@ -167,10 +167,12 @@ def ensure_cert(
     ca_cert, ca_key = _load_or_create_local_ca()
 
     leaf_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    now = datetime.datetime.utcnow()
+    now = datetime.datetime.now(datetime.timezone.utc)
     leaf = (
         x509.CertificateBuilder()
-        .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "mycelium.local")]))
+        .subject_name(
+            x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "mycelium.local")])
+        )
         .issuer_name(ca_cert.subject)
         .public_key(leaf_key.public_key())
         .serial_number(x509.random_serial_number())
