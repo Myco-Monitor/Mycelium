@@ -166,17 +166,22 @@ Mycelium/
    python run.py --dev
    ```
 
-5. **Open your browser:**
+5. **Open your browser** — *where* you open it depends on how you started the app:
 
-   | Mode | URL |
-   |------|-----|
-   | Local | `http://localhost:8051` |
-   | Network (HTTPS) | `https://mycelium.local:8443` (or `https://<this-host-ip>:8443`) |
+   | How you started it | Open the browser on… | URL |
+   |--------------------|----------------------|-----|
+   | `python run.py` (local) | the **same machine** running Mycelium | `http://localhost:8051` |
+   | `python run.py --https --host 0.0.0.0` (network) | **any device on the same network**, including the host itself — e.g. a phone, tablet, or another computer | `https://mycelium.local:8443` (or `https://<mycelium-host-ip>:8443`) |
 
-   > First HTTPS run generates a per-install **local CA**. Import
-   > `config/mycelium_local_ca.pem` into your browser once (like `ca_root.pem`)
-   > for warning-free HTTPS — or just accept the one-time warning. See
-   > [docs/deployment.md](docs/deployment.md).
+   > **Local mode is loopback-only:** `python run.py` binds to `127.0.0.1`, so the
+   > UI is reachable **only from the machine running Mycelium** — other devices
+   > can't connect to it. To reach Mycelium from a different device (phone, laptop,
+   > etc.), start it in network mode (`--https --host 0.0.0.0`).
+   >
+   > First HTTPS run generates a per-install **local CA**. On **each device you
+   > browse from**, import `config/mycelium_local_ca.pem` into the browser once
+   > (like `ca_root.pem`) for warning-free HTTPS — or just accept the one-time
+   > warning. See [docs/deployment.md](docs/deployment.md).
 
 ---
 
