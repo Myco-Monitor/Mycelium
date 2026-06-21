@@ -7,7 +7,7 @@ device PIN, and email notification (SMTP) configuration.
 Farm and room management has been moved to the Farm Overview page.
 """
 
-from nicegui import ui, app
+from nicegui import ui, app, run
 from web_ui.layout import page_layout, back_to_dashboard
 from web_ui.theme import get_colors
 from storage.tables.user_settings import get_user_setting, update_user_setting
@@ -277,20 +277,31 @@ def settings_page():
                 from api.services.email_service import EmailService
 
                 svc = EmailService()
-                ok = svc.send_alert_email(
-                    subject="Email Configuration Test",
-                    body=(
-                        "Your Myco-Monitor Mycelium email notifications are configured correctly.\n\n"
-                        "You will receive alerts at this address for critical events including:\n"
-                        "  - Device offline notifications\n"
-                        "  - Environmental threshold breaches (CO2, temperature, humidity)\n"
-                        "  - Relay operation failures\n\n"
-                        'If this is your first message, please mark it as "Not Spam" to ensure\n'
-                        "future alerts are delivered to your inbox."
-                    ),
-                    alert_type="info",
-                    user_id=uid,
+                # send_alert_email is blocking (smtplib + up to a 10s connect
+                # timeout). Run it off the event loop so a slow or failed send
+                # doesn't freeze the UI / drop the websocket. Show a spinner
+                # notification and dismiss it in finally so it never gets stuck.
+                progress = ui.notification(
+                    "Sending test email…", spinner=True, timeout=None
                 )
+                try:
+                    ok = await run.io_bound(
+                        svc.send_alert_email,
+                        subject="Email Configuration Test",
+                        body=(
+                            "Your Myco-Monitor Mycelium email notifications are configured correctly.\n\n"
+                            "You will receive alerts at this address for critical events including:\n"
+                            "  - Device offline notifications\n"
+                            "  - Environmental threshold breaches (CO2, temperature, humidity)\n"
+                            "  - Relay operation failures\n\n"
+                            'If this is your first message, please mark it as "Not Spam" to ensure\n'
+                            "future alerts are delivered to your inbox."
+                        ),
+                        alert_type="info",
+                        user_id=uid,
+                    )
+                finally:
+                    progress.dismiss()
                 if ok:
                     ui.notify("Test email sent successfully", type="positive")
                 else:

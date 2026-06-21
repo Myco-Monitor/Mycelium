@@ -38,7 +38,7 @@ Mycelium runs locally on a desktop, laptop, or Raspberry Pi 4. It discovers and 
 ### Alerting & Notifications
 - Configurable alert thresholds for environmental parameters
 - Alert history with acknowledgment and resolution tracking
-- Email notifications via SMTP for critical events (device offline, threshold breach)
+- Email notifications via SMTP for critical events (device offline, threshold breach) — see [docs/email_setup.md](docs/email_setup.md) (Gmail needs an App Password)
 - In-app toast notifications
 
 ### Analytics
@@ -214,7 +214,7 @@ full security model (TLS, secrets at rest, host hardening).
 | Fleet | `/fleet` | Firmware upload, batch OTA, version tracking |
 | Health | `/health` | Device health metrics (RSSI, heap, uptime) |
 | Schedules | `/relay-scheduler` | Visual relay schedule editor |
-| Settings | `/settings` | User profile, preferences, weather API, SMTP email |
+| Settings | `/settings` | User profile, preferences, weather API, SMTP email ([setup](docs/email_setup.md)) |
 
 ---
 
