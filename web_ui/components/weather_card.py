@@ -78,6 +78,53 @@ def _seconds_until_next_update(dt_unix: int) -> float:
     return max(next_update_in + 30, 10)
 
 
+def _spore_altitudes() -> list:
+    """Distinct altitudes (m) configured on weather-pressure-enabled Spores, sorted.
+
+    The card is location-level but altitude is per-Spore, so show one adjusted
+    figure per distinct altitude (usually one; more if Spores differ).
+    """
+    try:
+        from storage.tables.device_spore import get_all_device_spore
+
+        alts = {
+            s.get("altitude_m")
+            for s in get_all_device_spore()
+            if s.get("weather_pressure_enabled") and s.get("altitude_m") is not None
+        }
+        return sorted(alts)
+    except Exception:
+        return []
+
+
+def _pressure_cell(main: Dict, altitudes: list):
+    """Render the Pressure stat: ground-level by default, the altitude-adjusted
+    station pressure per configured altitude, and sea-level in a tooltip."""
+    from api.services.pressure_distribution_service import (
+        sea_level_to_station_pressure,
+    )
+
+    sea = main.get("pressure")
+    grnd = main.get("grnd_level")
+    primary = grnd if grnd is not None else sea
+
+    with ui.column().classes("items-center gap-0"):
+        ui.icon("speed", size="xs").classes("text-muted")
+        ui.label(f"{primary} hPa" if primary is not None else "—").classes(
+            "text-weight-bold text-caption"
+        )
+        if sea is not None:
+            for alt in altitudes:
+                adjusted = round(sea_level_to_station_pressure(sea, alt))
+                ui.label(f"{adjusted} hPa @ {alt:.0f} m").classes(
+                    "text-caption text-muted"
+                )
+        label = "Pressure (ground)" if grnd is not None else "Pressure"
+        cell_label = ui.label(label).classes("text-caption text-muted")
+        if sea is not None:
+            cell_label.tooltip(f"Sea-level: {sea} hPa")
+
+
 def weather_card(colors: dict):
     """
     Render the OWM weather card on the dashboard.
@@ -130,7 +177,6 @@ def weather_card(colors: dict):
         temp = main.get("temp", 0)
         feels_like = main.get("feels_like", 0)
         humidity = main.get("humidity", 0)
-        pressure = main.get("pressure", 0)
         wind_speed = wind.get("speed", 0)
         wind_deg = wind.get("deg", 0)
         description = weather.get("description", "").capitalize()
@@ -183,9 +229,10 @@ def weather_card(colors: dict):
         ui.separator().classes("q-my-sm")
 
         # Detail stats — horizontal row
+        altitudes = _spore_altitudes()
         with ui.row().classes("w-full justify-around flex-wrap gap-2"):
             _weather_stat("water_drop", "Humidity", f"{humidity}%")
-            _weather_stat("speed", "Pressure", f"{pressure} hPa")
+            _pressure_cell(main, altitudes)
             _weather_stat("air", "Wind", f"{wind_speed} {speed_unit} {wind_dir}")
             _weather_stat("wb_sunny", "Sunrise", sunrise)
             _weather_stat("nights_stay", "Sunset", sunset)

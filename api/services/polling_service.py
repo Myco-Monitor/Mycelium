@@ -363,11 +363,13 @@ class PollingService:
 
                         # Relay ambient pressure to opted-in Spores that have no
                         # local Hyphae barometer (weather-as-pressure-source feature).
-                        farm_id = location.get("farm_id")
-                        if weather and farm_id is not None:
+                        # farm_id scopes to one farm when set in settings; when unset
+                        # (None — nothing populates it today) all opted-in Spores get
+                        # this location's weather (single-farm default).
+                        if weather:
                             await (
                                 self.pressure_distribution.distribute_weather_pressure(
-                                    farm_id,
+                                    location.get("farm_id"),
                                     weather.get("pressure"),
                                     weather.get("pressure_grnd"),
                                 )
