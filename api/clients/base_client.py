@@ -123,6 +123,29 @@ class _SystemResolver(AbstractResolver):
 SYSTEM_RESOLVER = _SystemResolver()
 
 
+_DEFAULT_SSL = object()  # sentinel: build a device CA context when omitted
+
+
+def device_connector(ssl_ctx=_DEFAULT_SSL, **kwargs):
+    """Build a TCPConnector for reaching Spore/Hyphae devices over mDNS (.local).
+
+    Centralizes the IPv4 + glibc/Avahi resolution that every device-facing aiohttp
+    call needs so .local hostnames resolve under uvloop (uvicorn's native resolver
+    fails on them). Use this instead of constructing aiohttp.TCPConnector directly.
+
+    With no ssl_ctx a device CA context is created; pass an explicit context (or
+    None for plain HTTP) to override. Extra kwargs pass through to TCPConnector.
+    """
+    if ssl_ctx is _DEFAULT_SSL:
+        ssl_ctx = create_device_ssl_context()
+    return aiohttp.TCPConnector(
+        ssl=ssl_ctx,
+        family=socket.AF_INET,
+        resolver=SYSTEM_RESOLVER,
+        **kwargs,
+    )
+
+
 class ApiErrorType(Enum):
     """Enum for different types of API errors."""
 
@@ -249,17 +272,7 @@ class BaseApiClient:
         """Create a new HTTP session with optional TLS support."""
         if self.session is None or self.session.closed:
             ssl_ctx = self._create_ssl_context()
-            connector = aiohttp.TCPConnector(
-                limit=20,
-                force_close=False,
-                ssl=ssl_ctx,
-                # Devices are IPv4-only and resolved via mDNS (.local). Forcing
-                # AF_INET avoids the AAAA lookup, which mdns4_minimal can't answer.
-                family=socket.AF_INET,
-                # Force glibc/Avahi resolution instead of uvloop's native resolver,
-                # which fails on .local names under uvicorn. See _SystemResolver.
-                resolver=SYSTEM_RESOLVER,
-            )
+            connector = device_connector(ssl_ctx, limit=20, force_close=False)
             self.session = aiohttp.ClientSession(
                 timeout=aiohttp.ClientTimeout(total=self.timeout),
                 connector=connector,

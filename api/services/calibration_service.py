@@ -10,7 +10,7 @@ from typing import Dict, Optional, Any
 from dataclasses import dataclass
 
 from api.clients.auth_handler import DeviceAuthHandler
-from api.clients.base_client import create_device_ssl_context
+from api.clients.base_client import create_device_ssl_context, device_connector
 
 
 @dataclass
@@ -74,7 +74,7 @@ class CalibrationService:
         try:
             timeout = aiohttp.ClientTimeout(total=self.timeout)
             ssl_ctx = create_device_ssl_context()
-            connector = aiohttp.TCPConnector(ssl=ssl_ctx)
+            connector = device_connector(ssl_ctx)
             async with aiohttp.ClientSession(
                 timeout=timeout, connector=connector
             ) as session:
@@ -251,7 +251,7 @@ class CalibrationService:
         try:
             timeout = aiohttp.ClientTimeout(total=self.timeout)
             ssl_ctx = create_device_ssl_context()
-            connector = aiohttp.TCPConnector(ssl=ssl_ctx)
+            connector = device_connector(ssl_ctx)
             async with aiohttp.ClientSession(
                 timeout=timeout, connector=connector
             ) as session:

@@ -288,6 +288,27 @@ def update_device_status(
     return execute_update(query, (is_online, last_update, get_timestamp(), device_id))
 
 
+def set_device_online(device_id: int, is_online: int) -> int:
+    """Set only the online flag, leaving last_update untouched.
+
+    Use when marking a device offline so that last_update keeps meaning "last time
+    the device was actually reachable" (last successful contact), not last check.
+
+    Args:
+        device_id (int): ID of the device
+        is_online (int): New online status (0=offline, 1=online)
+
+    Returns:
+        int: Number of rows affected
+    """
+    query = """
+    UPDATE device_spore
+    SET is_online = ?, created_at = ?
+    WHERE device_id = ?
+    """
+    return execute_update(query, (is_online, get_timestamp(), device_id))
+
+
 def deactivate_device_spore(device_id: int, reason: Optional[str] = None) -> int:
     """
     Deactivate a device_spore.

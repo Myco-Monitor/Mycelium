@@ -147,10 +147,11 @@ class PressureDistributionService:
             return
 
         import aiohttp
-        from api.clients.base_client import create_device_ssl_context
+        from api.clients.base_client import device_connector
 
-        ssl_ctx = create_device_ssl_context()
-        connector = aiohttp.TCPConnector(ssl=ssl_ctx)
+        # device_connector forces IPv4 + glibc/Avahi resolution so the device's
+        # .local hostname resolves under uvloop (see _SystemResolver).
+        connector = device_connector()
         try:
             async with aiohttp.ClientSession(connector=connector) as session:
                 async with session.post(

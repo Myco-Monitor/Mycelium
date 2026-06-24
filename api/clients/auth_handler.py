@@ -5,13 +5,12 @@ This module provides PIN-based authentication with Spore and Hyphae devices.
 The devices use a challenge-response mechanism with SHA-256 hashing.
 """
 
-import socket
 import hashlib
 import aiohttp
 from typing import Optional, Dict
 from dataclasses import dataclass
 
-from api.clients.base_client import create_device_ssl_context, SYSTEM_RESOLVER
+from api.clients.base_client import create_device_ssl_context, device_connector
 
 
 @dataclass
@@ -63,9 +62,7 @@ class DeviceAuthHandler:
         try:
             timeout = aiohttp.ClientTimeout(total=self.timeout)
             ssl_ctx = create_device_ssl_context()
-            connector = aiohttp.TCPConnector(
-                ssl=ssl_ctx, family=socket.AF_INET, resolver=SYSTEM_RESOLVER
-            )
+            connector = device_connector(ssl_ctx)
             async with aiohttp.ClientSession(
                 timeout=timeout, connector=connector
             ) as session:
@@ -157,9 +154,7 @@ class DeviceAuthHandler:
 
         try:
             ssl_ctx = create_device_ssl_context()
-            connector = aiohttp.TCPConnector(
-                ssl=ssl_ctx, family=socket.AF_INET, resolver=SYSTEM_RESOLVER
-            )
+            connector = device_connector(ssl_ctx)
             async with aiohttp.ClientSession(
                 timeout=timeout, connector=connector
             ) as session:

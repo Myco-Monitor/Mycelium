@@ -39,7 +39,9 @@ from storage.tables.device_pins import store_device_pin, has_stored_pin
 logger = logging.getLogger(__name__)
 
 _SCHEME = "https"
-_TIMEOUT = 10
+# Kept short: these device fetches are synchronous (requests) and run on the UI
+# event loop, so a slow/unreachable device must not stall it for long.
+_TIMEOUT = 5
 _CA_CERT = str(Path(__file__).parent.parent.parent / "config" / "ca_root.pem")
 
 
@@ -409,6 +411,21 @@ def devices_page():
             "click",
             lambda: _run_mdns_discovery(colors, stat_cards, selected_device),
         )
+
+        # Periodically re-read device status from the DB so the tables + stat cards
+        # reflect what polling has recorded, without a manual page reload. Online
+        # status lives in the is_online flag (single source of truth); the poller
+        # keeps it current, this just surfaces it.
+        def _auto_refresh_status():
+            for key in ("_spore_table", "_hyphae_table", "_stat_cards"):
+                ref = selected_device.get(key)
+                if ref is not None:
+                    try:
+                        ref.refresh()
+                    except Exception:
+                        pass
+
+        ui.timer(20.0, _auto_refresh_status)
 
 
 # ---------------------------------------------------------------------------
@@ -969,7 +986,11 @@ def _render_spore_detail(device: Dict, colors: dict, selected_device: Dict = Non
 def _spore_readings_panel(device: Dict, colors: dict):
     """Show latest sensor readings for a Spore device."""
     ip = device.get("hostname", "")
-    readings = fetch_spore_readings_latest(ip) if ip else None
+    # Skip the blocking live fetch for an offline device (it would just hang until
+    # timeout and freeze the UI event loop); show the offline state instead.
+    readings = (
+        fetch_spore_readings_latest(ip) if ip and device.get("is_online") else None
+    )
 
     if not readings:
         ui.label("Could not fetch sensor readings. Device may be offline.").classes(
@@ -1167,7 +1188,7 @@ def _spore_pressure_source_card(device: Dict):
 def _spore_diagnostics_panel(device: Dict, colors: dict):
     """Show Spore diagnostics from /api/diagnostics (system, sensors, errors)."""
     ip = device.get("hostname", "")
-    info = fetch_spore_info(ip) if ip else None
+    info = fetch_spore_info(ip) if ip and device.get("is_online") else None
 
     if not info:
         ui.label("Could not fetch diagnostics. Device may be offline.").classes(
@@ -1298,7 +1319,7 @@ def _render_hyphae_detail(device: Dict, colors: dict, selected_device: Dict = No
 def _hyphae_system_panel(device: Dict, colors: dict):
     """Show Hyphae system information."""
     ip = device.get("hostname", "")
-    config = fetch_hyphae_config(ip) if ip else None
+    config = fetch_hyphae_config(ip) if ip and device.get("is_online") else None
 
     with ui.card().classes("w-full p-4"):
         ui.label("Device Information").classes(
@@ -1337,8 +1358,10 @@ def _hyphae_relay_config_panel(device: Dict, colors: dict):
     ip = device.get("hostname", "")
     device_id = device.get("device_id")
 
-    # Try live data first, fall back to database
-    relay_config = fetch_hyphae_relay_config(ip) if ip else None
+    # Try live data first (only if online), fall back to database
+    relay_config = (
+        fetch_hyphae_relay_config(ip) if ip and device.get("is_online") else None
+    )
     relays = relay_config.get("relays", []) if relay_config else []
 
     if not relays and device_id:
@@ -1382,7 +1405,9 @@ def _hyphae_relay_config_panel(device: Dict, colors: dict):
 def _hyphae_relay_state_panel(device: Dict, colors: dict):
     """Show current relay states (ON/OFF) for all 6 relays."""
     ip = device.get("hostname", "")
-    state_data = fetch_hyphae_relay_state(ip) if ip else None
+    state_data = (
+        fetch_hyphae_relay_state(ip) if ip and device.get("is_online") else None
+    )
     relays = state_data.get("relays", []) if state_data else []
 
     if state_data:
@@ -1434,8 +1459,10 @@ def _hyphae_schedule_panel(device: Dict, colors: dict):
     ip = device.get("hostname", "")
     device_id = device.get("device_id")
 
-    # Try live data first
-    schedule_data = fetch_hyphae_relay_schedule(ip) if ip else None
+    # Try live data first (only if online)
+    schedule_data = (
+        fetch_hyphae_relay_schedule(ip) if ip and device.get("is_online") else None
+    )
     groups = schedule_data.get("groups", []) if schedule_data else []
 
     # Fall back to database
@@ -1475,8 +1502,10 @@ def _hyphae_dynamic_panel(device: Dict, colors: dict):
     ip = device.get("hostname", "")
     device_id = device.get("device_id")
 
-    # Try live data first
-    dynamic_data = fetch_hyphae_relay_dynamic(ip) if ip else None
+    # Try live data first (only if online)
+    dynamic_data = (
+        fetch_hyphae_relay_dynamic(ip) if ip and device.get("is_online") else None
+    )
     controls = dynamic_data.get("controls", []) if dynamic_data else []
 
     # Fall back to database

@@ -25,10 +25,12 @@ from api.clients.base_client import is_resolution_error, RESOLUTION_GRACE
 from storage.tables.device_spore import (
     get_all_device_spore,
     update_device_status as update_spore_status,
+    set_device_online as set_spore_online,
 )
 from storage.tables.device_hyphae import (
     get_all_device_hyphae,
     update_device_status as update_hyphae_status,
+    set_device_online as set_hyphae_online,
 )
 
 
@@ -528,11 +530,19 @@ class PollingService:
         def _schedule(seconds):
             status["next_poll"] = datetime.now() + timedelta(seconds=max(1.0, seconds))
 
-        def _write_db(online: bool):
+        def _mark_online():
+            # Success bumps last_update — it marks the last *successful* contact.
             if device_type == "spore":
-                update_spore_status(device_id, 1 if online else 0)
+                update_spore_status(device_id, 1)
             elif device_type == "hyphae":
-                update_hyphae_status(device_id, 1 if online else 0)
+                update_hyphae_status(device_id, 1)
+
+        def _mark_offline():
+            # Preserve last_update so "Last Seen" stays the last reachable time.
+            if device_type == "spore":
+                set_spore_online(device_id, 0)
+            elif device_type == "hyphae":
+                set_hyphae_online(device_id, 0)
 
         if success:
             status["online"] = True
@@ -540,34 +550,42 @@ class PollingService:
             status["failures"] = 0
             status["resolution_misses"] = 0
             _schedule(interval + random.uniform(-jitter, jitter))
-            _write_db(True)
+            _mark_online()
 
-        elif is_resolution_error(error):
-            # Transient mDNS glitch — Avahi briefly failed to resolve the .local
-            # name, the device itself is probably fine. Retry at the normal cadence
-            # (no exponential backoff) and keep the device's current status through
-            # a short grace window so one missed lookup doesn't bench it.
+        elif is_resolution_error(error) and status["online"]:
+            # Transient mDNS glitch on an ALREADY-online device — Avahi briefly
+            # failed to resolve the .local name, the device itself is probably
+            # fine. Retry at the normal cadence and keep it online through a short
+            # grace window so one missed lookup doesn't bench it. (A device that
+            # isn't already online — cold start, never seen, or unplugged — falls
+            # through to the offline branch below and is marked offline at once.)
             status["resolution_misses"] = status.get("resolution_misses", 0) + 1
             _schedule(interval + random.uniform(-jitter, jitter))
             if status["resolution_misses"] >= RESOLUTION_GRACE:
                 status["online"] = False
-                _write_db(False)
+                _mark_offline()
             # else: within grace — leave online state and DB untouched
 
         else:
-            # Genuine failure (resolved host, refused/timeout/HTTP error). Mark
-            # offline and back off exponentially.
+            # Offline now: a cold/absent device (resolution fails, not yet online)
+            # or a genuine failure (resolved host, refused/timeout/HTTP error).
             status["online"] = False
-            status["failures"] += 1
             status["resolution_misses"] = 0
-            backoff_factor = self.polling_config[device_type]["backoff_factor"]
-            max_backoff = self.polling_config[device_type]["max_backoff"]
-            backoff = min(
-                interval * (backoff_factor ** status["failures"]),
-                max_backoff,
-            )
-            _schedule(backoff + random.uniform(-jitter, jitter))
-            _write_db(False)
+            if is_resolution_error(error):
+                # Absent/unresolvable device: keep checking at the normal cadence
+                # so it's picked up promptly when it comes back; no escalation.
+                _schedule(interval + random.uniform(-jitter, jitter))
+            else:
+                # Genuine failure: back off exponentially to avoid hammering.
+                status["failures"] += 1
+                backoff_factor = self.polling_config[device_type]["backoff_factor"]
+                max_backoff = self.polling_config[device_type]["max_backoff"]
+                backoff = min(
+                    interval * (backoff_factor ** status["failures"]),
+                    max_backoff,
+                )
+                _schedule(backoff + random.uniform(-jitter, jitter))
+            _mark_offline()
 
         self.logger.debug(
             f"Updated status for {device_type} device {device_id}: "

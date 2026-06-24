@@ -16,7 +16,7 @@ from datetime import datetime
 
 import aiohttp
 
-from api.clients.base_client import create_device_ssl_context
+from api.clients.base_client import create_device_ssl_context, device_connector
 from storage.tables.device_spore import (
     get_all_device_spore,
     update_device_status as update_spore_status,
@@ -62,7 +62,7 @@ class HealthService:
         """Get or create the aiohttp session."""
         if self._session is None or self._session.closed:
             ssl_ctx = create_device_ssl_context()
-            connector = aiohttp.TCPConnector(ssl=ssl_ctx)
+            connector = device_connector(ssl_ctx)
             self._session = aiohttp.ClientSession(
                 timeout=aiohttp.ClientTimeout(total=self.timeout), connector=connector
             )
