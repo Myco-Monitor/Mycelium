@@ -11,10 +11,11 @@ Displays current weather conditions with smart polling:
 import time
 import logging
 import requests
-from datetime import datetime
 from typing import Optional, Dict
 
 from nicegui import ui, app
+
+from web_ui.format import fmt_time
 
 logger = logging.getLogger(__name__)
 
@@ -182,22 +183,12 @@ def weather_card(colors: dict):
         description = weather.get("description", "").capitalize()
         icon_code = weather.get("icon", "01d")
 
-        # Sunrise/sunset
-        sunrise = (
-            datetime.fromtimestamp(sys_data.get("sunrise", 0)).strftime("%H:%M")
-            if sys_data.get("sunrise")
-            else "—"
-        )
-        sunset = (
-            datetime.fromtimestamp(sys_data.get("sunset", 0)).strftime("%H:%M")
-            if sys_data.get("sunset")
-            else "—"
-        )
+        # Sunrise/sunset (honor 12/24h preference)
+        sunrise = fmt_time(sys_data.get("sunrise"))
+        sunset = fmt_time(sys_data.get("sunset"))
 
         # Data timestamp
-        data_time = (
-            datetime.fromtimestamp(dt_unix).strftime("%H:%M") if dt_unix else "—"
-        )
+        data_time = fmt_time(dt_unix)
 
         # Calculate next poll interval
         if dt_unix:

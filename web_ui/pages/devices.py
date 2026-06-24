@@ -9,7 +9,6 @@ configuration, relay state, schedule, and dynamic control views.
 import re
 import subprocess
 import logging
-from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, List
 
@@ -18,6 +17,7 @@ import requests
 from nicegui import ui, app
 from web_ui.layout import page_layout, back_to_dashboard
 from web_ui.theme import get_colors, STATUS_COLORS
+from web_ui.format import fmt_datetime
 
 from storage.tables.device_spore import (
     get_all_device_spore,
@@ -265,15 +265,10 @@ def _room_options() -> List[Dict]:
 
 
 def _format_last_seen(value) -> str:
-    """Format a timestamp or datetime string for display."""
+    """Format a timestamp or datetime string for display (honors 12/24h pref)."""
     if not value:
         return "Never"
-    try:
-        if isinstance(value, (int, float)):
-            return datetime.fromtimestamp(value).strftime("%Y-%m-%d %H:%M:%S")
-        return str(value)
-    except Exception:
-        return str(value)
+    return fmt_datetime(value, fallback="Never")
 
 
 def _online_badge(is_online) -> None:
@@ -1004,11 +999,7 @@ def _spore_readings_panel(device: Dict, colors: dict):
         ts = int(ts)
     except (TypeError, ValueError):
         ts = 0
-    when = (
-        datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
-        if ts > 0
-        else "Unknown (device clock not synced)"
-    )
+    when = fmt_datetime(ts) if ts > 0 else "Unknown (device clock not synced)"
     ui.label(f"Last reading: {when}").classes("text-caption text-muted q-mb-md")
 
     temp_value, temp_unit = _fmt_temp(readings.get("temperature"), _temp_pref())
@@ -1237,7 +1228,7 @@ def _spore_diagnostics_panel(device: Dict, colors: dict):
         if diag_now > 0 and uptime > 0:
             when_unix = diag_now - (uptime - boot_sec)
             if when_unix > 0:
-                return datetime.fromtimestamp(when_unix).strftime("%Y-%m-%d %H:%M:%S")
+                return fmt_datetime(when_unix)
         return f"+{_fmt_uptime(boot_sec)} (since boot)"
 
     entries = errors.get("entries", []) if isinstance(errors, dict) else []
@@ -1807,7 +1798,7 @@ def _device_ota_card(device: Dict, device_type: str, user_id, ota_svc):
                 with ui.row().classes("items-center gap-2"):
                     ui.badge(h.get("status", "?"), color=status_color)
                     ui.label(h.get("firmware_name", "")).classes("text-caption")
-                    ui.label(h.get("started_at", "")[:16]).classes(
+                    ui.label(fmt_datetime(h.get("started_at"), fallback="")).classes(
                         "text-caption text-muted"
                     )
                     if h.get("error_message"):

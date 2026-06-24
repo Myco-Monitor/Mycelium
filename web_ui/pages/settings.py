@@ -10,6 +10,7 @@ Farm and room management has been moved to the Farm Overview page.
 from nicegui import ui, app, run
 from web_ui.layout import page_layout, back_to_dashboard
 from web_ui.theme import get_colors
+from web_ui.format import fmt_datetime
 from web_ui.auth import is_admin
 from storage.tables.user_settings import (
     get_user_setting,
@@ -196,8 +197,14 @@ def settings_page():
                     user_info.get("user_role", ""),
                     "Role for access control",
                 )
-                _readonly_field("Account Created", str(user_info.get("created_at", "")))
-                _readonly_field("Last Updated", str(user_info.get("updated_at", "")))
+                _readonly_field(
+                    "Account Created",
+                    fmt_datetime(user_info.get("created_at"), fallback=""),
+                )
+                _readonly_field(
+                    "Last Updated",
+                    fmt_datetime(user_info.get("updated_at"), fallback=""),
+                )
 
         # ---- Section 2: Preferences ----
         with ui.card().classes("w-full"):
@@ -220,11 +227,14 @@ def settings_page():
             ui.label("Time Format").classes("text-weight-bold q-mt-md")
             time_toggle = ui.toggle(
                 options={"12": "12-hour (AM/PM)", "24": "24-hour"},
-                value=user_info.get("time_format") or "12",
+                value=user_info.get("time_format") or "24",
             )
 
             def _save_time(e):
                 update_user_setting(uid, time_format=time_toggle.value)
+                # Cache in session storage so the new format applies immediately
+                # across pages (see web_ui/format.get_time_format).
+                app.storage.user["time_format"] = time_toggle.value
                 ui.notify("Time format saved", type="positive")
 
             time_toggle.on("update:model-value", _save_time)

@@ -13,6 +13,7 @@ from nicegui import ui
 
 from storage.tables.device_hyphae import get_all_device_hyphae
 from storage.tables.readings_pressure import get_latest_pressure
+from web_ui.format import fmt_time
 
 logger = logging.getLogger(__name__)
 
@@ -75,9 +76,8 @@ def _get_pressure_readings(devices: List[Dict[str, Any]]) -> List[Dict[str, Any]
         latest = get_latest_pressure(device_id)
         if latest:
             try:
-                ts = datetime.fromisoformat(latest["reading_ts"]).strftime(
-                    "%H:%M %b %d"
-                )
+                dt = datetime.fromisoformat(latest["reading_ts"])
+                ts = f"{fmt_time(dt)} {dt.strftime('%b %d')}"
             except (ValueError, TypeError):
                 ts = str(latest.get("reading_ts", ""))
 

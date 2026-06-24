@@ -8,6 +8,7 @@ firmware version, response time, last error, and online status.
 from nicegui import ui, app
 from web_ui.layout import page_layout, back_to_dashboard
 from web_ui.theme import get_colors, STATUS_COLORS
+from web_ui.format import fmt_datetime
 
 
 @ui.page("/health")
@@ -219,7 +220,7 @@ def _device_health_card(
 
         # Last check
         if last_check:
-            _info_row("Last Check", str(last_check)[:19])
+            _info_row("Last Check", fmt_datetime(last_check, fallback="—"))
 
 
 def _info_row(label: str, value: str):

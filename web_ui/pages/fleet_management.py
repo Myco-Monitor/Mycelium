@@ -11,6 +11,7 @@ from pathlib import Path
 from nicegui import ui, app
 from web_ui.layout import page_layout, back_to_dashboard
 from web_ui.theme import get_colors
+from web_ui.format import fmt_datetime
 
 FIRMWARE_DIR = Path(__file__).parent.parent.parent / "data" / "firmware"
 FIRMWARE_DIR.mkdir(parents=True, exist_ok=True)
@@ -505,6 +506,7 @@ def _ota_history_section(colors: dict):
             {
                 **h,
                 "device_label": f"{h.get('device_type', '')} #{h.get('device_id', '')}",
+                "started_at": fmt_datetime(h.get("started_at"), fallback=""),
             }
         )
 
