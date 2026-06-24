@@ -116,29 +116,19 @@ class SporeDataService:
         Args:
             device_id (int): ID of the device
 
+        Raises on failure so the polling service owns device status and backoff
+        (it distinguishes a transient mDNS miss from a genuine outage). Other
+        callers read stored readings from the database, not this method.
+
         Returns:
-            Optional[Dict[str, Any]]: The latest reading, or None if the device is not reachable
+            Optional[Dict[str, Any]]: The stored latest reading.
         """
-        try:
-            client = await self.get_client(device_id)
-            reading = await client.get_latest_reading()
+        client = await self.get_client(device_id)
+        reading = await client.get_latest_reading()
 
-            # Transform and store the reading
-            stored_reading = await self.store_reading(device_id, reading)
-
-            # Update device status
-            update_device_status(device_id, 1)
-
-            return stored_reading
-        except Exception as e:
-            self.logger.error(
-                f"Error getting latest reading for device {device_id}: {e}"
-            )
-
-            # Update device status
-            update_device_status(device_id, 0)
-
-            return None
+        # Transform and store the reading
+        stored_reading = await self.store_reading(device_id, reading)
+        return stored_reading
 
     async def get_all_readings(self, device_id: int) -> List[Dict[str, Any]]:
         """

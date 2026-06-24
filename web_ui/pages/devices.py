@@ -24,8 +24,12 @@ from storage.tables.device_spore import (
     link_spore_to_hyphae,
     unlink_spore_from_hyphae,
     update_spore_weather_pressure,
+    delete_device_spore,
 )
-from storage.tables.device_hyphae import get_all_device_hyphae
+from storage.tables.device_hyphae import (
+    get_all_device_hyphae,
+    delete_device_hyphae,
+)
 from storage.tables.grow_rooms import get_all_grow_rooms
 from storage.tables.relay_settings import get_device_relay_settings
 from storage.tables.schedule_settings import get_device_schedule_settings
@@ -83,6 +87,17 @@ def discover_mac_address(hostname: str) -> Optional[str]:
     return None
 
 
+def _placeholder_mac(ip: str) -> str:
+    """Stable, unique MAC placeholder for devices that don't report a MAC.
+
+    The Spore/Hyphae API doesn't expose a MAC and ARP can't resolve an mDNS
+    name, so derive a per-host label. Using the (unique) hostname keeps the
+    UNIQUE constraint on mac_address satisfied so multiple devices can be added.
+    """
+    label = ip.split(":")[0].replace(".local", "")
+    return f"unknown-{label}"
+
+
 def fetch_spore_readings_latest(ip: str) -> Optional[Dict]:
     """Fetch latest readings from Spore /api/readings/latest."""
     return _get_json(ip, "/api/readings/latest")
@@ -129,9 +144,22 @@ def fetch_hyphae_relay_dynamic(ip: str) -> Optional[Dict]:
 
 def store_complete_spore_device_data(ip: str, room_id) -> Dict:
     """Fetch data from a Spore device, register it in the DB, and return result."""
-    from storage.tables.device_spore import create_device_spore
+    from storage.tables.device_spore import (
+        create_device_spore,
+        get_device_spore_by_hostname,
+        normalize_device_host,
+    )
 
     errors = []
+
+    # Guard against adding the same device twice (hostname is the stable identity).
+    host = normalize_device_host(ip)
+    if get_device_spore_by_hostname(host):
+        return {
+            "success": False,
+            "errors": [f"A Spore with hostname {host} is already in the list."],
+        }
+
     info = fetch_spore_info(ip) or {}
     config = fetch_spore_config(ip) or {}
     readings = fetch_spore_readings_latest(ip)
@@ -141,7 +169,7 @@ def store_complete_spore_device_data(ip: str, room_id) -> Dict:
         or info.get("device_name")
         or ip.split(":")[0]  # fall back to the hostname (e.g. spore-1234.local)
     )
-    mac = info.get("mac_address") or discover_mac_address(ip) or "unknown"
+    mac = info.get("mac_address") or discover_mac_address(ip) or _placeholder_mac(ip)
     firmware = info.get("firmware_version") or config.get("firmware_version", "")
 
     try:
@@ -165,14 +193,27 @@ def store_complete_spore_device_data(ip: str, room_id) -> Dict:
 
 def store_complete_hyphae_device_data(ip: str, room_id, pin=None) -> Dict:
     """Fetch data from a Hyphae device, register it in the DB, and return result."""
-    from storage.tables.device_hyphae import create_device_hyphae
+    from storage.tables.device_hyphae import (
+        create_device_hyphae,
+        get_device_hyphae_by_hostname,
+    )
+    from storage.tables.device_spore import normalize_device_host
 
     errors = []
+
+    # Guard against adding the same device twice (hostname is the stable identity).
+    host = normalize_device_host(ip)
+    if get_device_hyphae_by_hostname(host):
+        return {
+            "success": False,
+            "errors": [f"A Hyphae with hostname {host} is already in the list."],
+        }
+
     info = fetch_hyphae_config(ip) or {}
     relay = fetch_hyphae_relay_config(ip)
 
     device_name = info.get("device_name") or ip.split(":")[0]  # fall back to hostname
-    mac = info.get("mac_address") or discover_mac_address(ip) or "unknown"
+    mac = info.get("mac_address") or discover_mac_address(ip) or _placeholder_mac(ip)
     firmware = info.get("firmware_version", "")
 
     try:
@@ -350,9 +391,13 @@ def devices_page():
                             ).classes("text-muted")
                             return
                         if selected_device["type"] == "spore":
-                            _render_spore_detail(selected_device["data"], colors)
+                            _render_spore_detail(
+                                selected_device["data"], colors, selected_device
+                            )
                         else:
-                            _render_hyphae_detail(selected_device["data"], colors)
+                            _render_hyphae_detail(
+                                selected_device["data"], colors, selected_device
+                            )
 
                 device_detail()
 
@@ -360,7 +405,10 @@ def devices_page():
                 selected_device["_refresh_detail"] = device_detail
 
         # Wire discovery button now that stat_cards is defined
-        discover_btn.on("click", lambda: _run_mdns_discovery(colors, stat_cards))
+        discover_btn.on(
+            "click",
+            lambda: _run_mdns_discovery(colors, stat_cards, selected_device),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -433,18 +481,6 @@ def _build_spore_panel(colors, selected_device, tabs, detail_tab, stat_cards):
                 "align": "left",
             },
             {
-                "name": "mac_address",
-                "label": "MAC",
-                "field": "mac_address",
-                "align": "left",
-            },
-            {
-                "name": "firmware_version",
-                "label": "Firmware",
-                "field": "firmware_version",
-                "align": "left",
-            },
-            {
                 "name": "is_online",
                 "label": "Status",
                 "field": "is_online",
@@ -466,8 +502,6 @@ def _build_spore_panel(colors, selected_device, tabs, detail_tab, stat_cards):
                     "device_name": d.get("device_name", ""),
                     "hostname": d.get("hostname", ""),
                     "room_name": d.get("room_name", ""),
-                    "mac_address": d.get("mac_address", ""),
-                    "firmware_version": d.get("firmware_version", ""),
                     "is_online": "Online" if d.get("is_online") else "Offline",
                     "last_update": _format_last_seen(d.get("last_update")),
                     "_raw": d,
@@ -550,6 +584,10 @@ def _build_spore_panel(colors, selected_device, tabs, detail_tab, stat_cards):
         ).props("outline")
 
     spore_table()
+
+    # Expose refreshers so the detail panel (e.g. Remove Device) can update the list.
+    selected_device["_spore_table"] = spore_table
+    selected_device["_stat_cards"] = stat_cards
 
 
 # ---------------------------------------------------------------------------
@@ -742,6 +780,10 @@ def _build_hyphae_panel(colors, selected_device, tabs, detail_tab, stat_cards):
 
     hyphae_table()
 
+    # Expose refreshers so the detail panel (e.g. Remove Device) can update the list.
+    selected_device["_hyphae_table"] = hyphae_table
+    selected_device["_stat_cards"] = stat_cards
+
 
 # ---------------------------------------------------------------------------
 # Add device dialogs
@@ -900,14 +942,13 @@ def _open_add_hyphae_dialog(hyphae_table_refresh, stat_cards_refresh):
 # ---------------------------------------------------------------------------
 
 
-def _render_spore_detail(device: Dict, colors: dict):
+def _render_spore_detail(device: Dict, colors: dict, selected_device: Dict = None):
     """Render the full detail panel for a Spore device."""
     ui.label(f"{device.get('device_name', 'Spore Device')}").classes("text-h5")
     _online_badge(device.get("is_online"))
 
     with ui.tabs().classes("w-full") as dtabs:
         tab_readings = ui.tab("Readings", icon="thermostat")
-        tab_config = ui.tab("Configuration", icon="settings")
         tab_diag = ui.tab("Diagnostics", icon="monitor_heart")
         tab_mgmt = ui.tab("Management", icon="build")
 
@@ -916,17 +957,13 @@ def _render_spore_detail(device: Dict, colors: dict):
         with ui.tab_panel(tab_readings):
             _spore_readings_panel(device, colors)
 
-        # --- Configuration ---
-        with ui.tab_panel(tab_config):
-            _spore_config_panel(device, colors)
-
         # --- Diagnostics ---
         with ui.tab_panel(tab_diag):
             _spore_diagnostics_panel(device, colors)
 
-        # --- Management (PIN + OTA) ---
+        # --- Management (settings, PIN, OTA, remove) ---
         with ui.tab_panel(tab_mgmt):
-            _device_management_panel(device, "spore", colors)
+            _device_management_panel(device, "spore", colors, selected_device)
 
 
 def _spore_readings_panel(device: Dict, colors: dict):
@@ -940,26 +977,49 @@ def _spore_readings_panel(device: Dict, colors: dict):
         )
         return
 
-    timestamp = readings.get("datetime", "Unknown")
-    ui.label(f"Last reading: {timestamp}").classes("text-caption text-muted q-mb-md")
+    # /api/readings/latest returns a unix timestamp (0 until the device clock syncs).
+    ts = readings.get("timestamp", 0)
+    try:
+        ts = int(ts)
+    except (TypeError, ValueError):
+        ts = 0
+    when = (
+        datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
+        if ts > 0
+        else "Unknown (device clock not synced)"
+    )
+    ui.label(f"Last reading: {when}").classes("text-caption text-muted q-mb-md")
+
+    temp_value, temp_unit = _fmt_temp(readings.get("temperature"), _temp_pref())
 
     with ui.row().classes("w-full gap-4 flex-wrap"):
         _reading_card(
             "Temperature",
-            readings.get("temperature", "N/A"),
-            "C",
+            temp_value,
+            temp_unit,
             "thermostat",
             colors["primary"],
         )
         _reading_card(
             "Humidity",
-            readings.get("humidity", "N/A"),
+            _fmt_reading(readings.get("humidity"), 1),
             "%",
             "water_drop",
             colors["primary"],
         )
         _reading_card(
-            "CO2", readings.get("co2_ppm", "N/A"), "ppm", "co2", colors["primary"]
+            "CO2",
+            _fmt_reading(readings.get("co2"), 0),
+            "ppm",
+            "co2",
+            colors["primary"],
+        )
+        _reading_card(
+            "Pressure",
+            _fmt_reading(readings.get("pressure"), 0),
+            "hPa",
+            "speed",
+            colors["primary"],
         )
 
 
@@ -972,26 +1032,52 @@ def _reading_card(label: str, value, unit: str, icon: str, accent: str):
         ui.label(label).classes("text-caption text-muted")
 
 
-def _spore_config_panel(device: Dict, colors: dict):
-    """Show Spore device configuration."""
-    ip = device.get("hostname", "")
-    config = fetch_spore_config(ip) if ip else None
+def _fmt_reading(value, digits: int = 1) -> str:
+    """Format a numeric sensor reading, or 'N/A' if missing/non-numeric."""
+    try:
+        return f"{float(value):.{digits}f}"
+    except (TypeError, ValueError):
+        return "N/A"
 
-    with ui.card().classes("w-full p-4"):
-        ui.label("Device Information").classes(
-            "text-subtitle1 text-weight-bold q-mb-sm"
-        )
-        _kv("Device Name", device.get("device_name", "Unknown"))
-        _kv("Hostname", device.get("hostname", "Unknown"))
-        _kv("MAC Address", device.get("mac_address", "Unknown"))
-        _kv("Room", device.get("room_name", "Unassigned"))
-        _kv("Firmware", device.get("firmware_version", "Unknown"))
 
-    # Hyphae association card
-    with ui.card().classes("w-full p-4 q-mt-md"):
-        ui.label("Hyphae Association").classes(
-            "text-subtitle1 text-weight-bold q-mb-sm"
-        )
+def _fmt_uptime(seconds) -> str:
+    """Format an uptime given in seconds as 'Hh Mm Ss'."""
+    try:
+        seconds = int(seconds)
+    except (TypeError, ValueError):
+        return "N/A"
+    hours, rem = divmod(seconds, 3600)
+    minutes, secs = divmod(rem, 60)
+    return f"{hours}h {minutes}m {secs}s"
+
+
+def _temp_pref() -> str:
+    """Return the current user's temperature unit preference ('C' or 'F')."""
+    try:
+        from storage.tables.user_settings import get_user_setting
+
+        uid = app.storage.user.get("user_id")
+        info = get_user_setting(uid) if uid else None
+        return (info.get("temp_pref") or "C") if info else "C"
+    except Exception:
+        return "C"
+
+
+def _fmt_temp(celsius, pref: str, digits: int = 1):
+    """Format a Celsius reading per the user's unit preference. Returns (value, unit)."""
+    try:
+        c = float(celsius)
+    except (TypeError, ValueError):
+        return "N/A", pref if pref in ("C", "F") else "C"
+    if pref == "F":
+        return f"{c * 9 / 5 + 32:.{digits}f}", "F"
+    return f"{c:.{digits}f}", "C"
+
+
+def _spore_hyphae_association_card(device: Dict):
+    """Associate a Spore with a Hyphae controller. Shown in the Management tab."""
+    with ui.card().classes("w-full p-4 q-mb-md"):
+        ui.label("Hyphae Association").classes("text-h6 q-mb-sm")
 
         hyphae_devices = _safe_get_hyphae_devices()
         hyphae_opts = {0: "— None —"}
@@ -1023,13 +1109,17 @@ def _spore_config_panel(device: Dict, colors: dict):
             "outline dense"
         ).classes("q-mt-sm")
 
-    # Ambient pressure source card — let Mycelium relay OpenWeatherMap pressure
-    # to Spores that have no Hyphae supplying local barometric pressure.
+
+def _spore_pressure_source_card(device: Dict):
+    """Choose the ambient-pressure source for a Spore. Shown in the Management tab.
+
+    Lets Mycelium relay OpenWeatherMap pressure to Spores that have no Hyphae
+    supplying local barometric pressure.
+    """
+    spore_id = device.get("device_id")
     has_hyphae = bool(device.get("hyphae_id"))
-    with ui.card().classes("w-full p-4 q-mt-md"):
-        ui.label("Ambient Pressure Source").classes(
-            "text-subtitle1 text-weight-bold q-mb-sm"
-        )
+    with ui.card().classes("w-full p-4 q-mb-md"):
+        ui.label("Ambient Pressure Source").classes("text-h6 q-mb-sm")
 
         if has_hyphae:
             ui.label(
@@ -1073,27 +1163,9 @@ def _spore_config_panel(device: Dict, colors: dict):
             "Save Pressure Source", icon="cloud", on_click=_save_weather_pressure
         ).props("outline dense").classes("q-mt-sm")
 
-    if config:
-        with ui.card().classes("w-full p-4 q-mt-md"):
-            ui.label("Sensor Configuration").classes(
-                "text-subtitle1 text-weight-bold q-mb-sm"
-            )
-            _kv("Measurement Interval", config.get("measurement_interval_text", "N/A"))
-            _kv("Temperature Offset", config.get("temperature_offset_text", "N/A"))
-            _kv(
-                "Altitude Compensation", config.get("altitude_compensation_text", "N/A")
-            )
-            _kv("Temperature Display", config.get("temperature_display_text", "N/A"))
-            _kv("Auto Calibration", config.get("auto_calibration_text", "N/A"))
-            _kv("Forced Recalibration", config.get("forced_recalibration_text", "N/A"))
-    else:
-        ui.label("Could not fetch live configuration from device.").classes(
-            "text-muted q-mt-md"
-        )
-
 
 def _spore_diagnostics_panel(device: Dict, colors: dict):
-    """Show Spore device diagnostics (memory, WiFi signal, etc.)."""
+    """Show Spore diagnostics from /api/diagnostics (system, sensors, errors)."""
     ip = device.get("hostname", "")
     info = fetch_spore_info(ip) if ip else None
 
@@ -1103,43 +1175,71 @@ def _spore_diagnostics_panel(device: Dict, colors: dict):
         )
         return
 
+    system = info.get("system", {})
+    sensors = info.get("sensors", {})
+    errors = info.get("errors", {})
+
+    # --- System ---
     with ui.card().classes("w-full p-4"):
-        ui.label("System Diagnostics").classes(
+        ui.label("System").classes("text-subtitle1 text-weight-bold q-mb-sm")
+        _kv("Uptime", _fmt_uptime(system.get("uptime_sec")))
+        _kv("Free Memory", f"{system.get('heap_free_kb', 'N/A')} KB")
+        _kv("Min Free Memory", f"{system.get('heap_min_free_kb', 'N/A')} KB")
+        _kv("WiFi Signal", f"{system.get('wifi_rssi_dbm', 'N/A')} dBm")
+
+    # --- Sensors ---
+    with ui.card().classes("w-full p-4 q-mt-md"):
+        ui.label("Sensors").classes("text-subtitle1 text-weight-bold q-mb-sm")
+        s_temp, s_unit = _fmt_temp(sensors.get("temperature"), _temp_pref())
+        _kv("Data Valid", "Yes" if sensors.get("valid") else "No")
+        _kv("CO2", f"{_fmt_reading(sensors.get('co2'), 0)} ppm")
+        _kv("Temperature", f"{s_temp} {s_unit}")
+        _kv("Humidity", f"{_fmt_reading(sensors.get('humidity'), 1)} %")
+
+    # --- Error history ---
+    # Entry timestamps are seconds-since-boot; convert to wall-clock using the
+    # device's current unix time and uptime (both in this same diagnostics reply).
+    try:
+        diag_now = int(info.get("timestamp", 0))
+    except (TypeError, ValueError):
+        diag_now = 0
+    try:
+        uptime = int(system.get("uptime_sec", 0))
+    except (TypeError, ValueError):
+        uptime = 0
+
+    def _error_when(entry) -> str:
+        try:
+            boot_sec = int(entry.get("timestamp_sec", 0))
+        except (TypeError, ValueError):
+            boot_sec = 0
+        if diag_now > 0 and uptime > 0:
+            when_unix = diag_now - (uptime - boot_sec)
+            if when_unix > 0:
+                return datetime.fromtimestamp(when_unix).strftime("%Y-%m-%d %H:%M:%S")
+        return f"+{_fmt_uptime(boot_sec)} (since boot)"
+
+    entries = errors.get("entries", []) if isinstance(errors, dict) else []
+    total = errors.get("total_count", len(entries)) if isinstance(errors, dict) else 0
+    with ui.card().classes("w-full p-4 q-mt-md"):
+        ui.label(f"Error History ({total})").classes(
             "text-subtitle1 text-weight-bold q-mb-sm"
         )
-
-        if "wifi_signal_strength_text" in info:
-            _kv("WiFi Signal", info["wifi_signal_strength_text"])
-
-        if "memory_usage_percentage" in info:
-            _kv("Memory Usage", f"{info['memory_usage_percentage']}%")
-            with ui.linear_progress(
-                value=info["memory_usage_percentage"] / 100
-            ).classes("q-mt-xs"):
-                pass
-
-        if "total_memory_text" in info:
-            _kv("Total Memory", info["total_memory_text"])
-        if "free_memory_text" in info:
-            _kv("Free Memory", info["free_memory_text"])
-
-        # Show any additional info keys
-        skip_keys = {
-            "wifi_signal_strength_text",
-            "wifi_signal_strength_dbm",
-            "memory_usage_percentage",
-            "total_memory_text",
-            "free_memory_text",
-            "total_memory_kb",
-            "used_memory_kb",
-            "free_memory_kb",
-            "used_memory_text",
-            "parse_error",
-        }
-        for key, value in info.items():
-            if key not in skip_keys and isinstance(value, (str, int, float)):
-                display_key = key.replace("_", " ").title()
-                _kv(display_key, str(value))
+        if not entries:
+            ui.label("No errors recorded.").classes("text-muted")
+        else:
+            for e in entries:
+                level = e.get("level", "INFO")
+                color = {"ERROR": "red", "WARN": "orange"}.get(level, "grey")
+                with ui.row().classes("items-center gap-2"):
+                    ui.badge(level, color=color)
+                    ui.label(_error_when(e)).classes("text-caption text-muted")
+                    ui.label(
+                        f"{e.get('component', '?')}: {e.get('message', '')}"
+                    ).classes("text-caption")
+                    code = e.get("code")
+                    if code:
+                        ui.label(f"(code {code})").classes("text-caption text-muted")
 
 
 # ---------------------------------------------------------------------------
@@ -1147,7 +1247,7 @@ def _spore_diagnostics_panel(device: Dict, colors: dict):
 # ---------------------------------------------------------------------------
 
 
-def _render_hyphae_detail(device: Dict, colors: dict):
+def _render_hyphae_detail(device: Dict, colors: dict, selected_device: Dict = None):
     """Render the full detail panel for a Hyphae device."""
     mode_map = {0: "Offline", 1: "Testing", 2: "Running"}
     op_map = {0: "Schedule", 1: "Dynamic"}
@@ -1192,7 +1292,7 @@ def _render_hyphae_detail(device: Dict, colors: dict):
             _hyphae_dynamic_panel(device, colors)
 
         with ui.tab_panel(tab_mgmt):
-            _device_management_panel(device, "hyphae", colors)
+            _device_management_panel(device, "hyphae", colors, selected_device)
 
 
 def _hyphae_system_panel(device: Dict, colors: dict):
@@ -1447,14 +1547,21 @@ def _hyphae_dynamic_panel(device: Dict, colors: dict):
 # ---------------------------------------------------------------------------
 
 
-def _device_management_panel(device: Dict, device_type: str, colors: dict):
-    """PIN management and OTA firmware update for a single device."""
+def _device_management_panel(
+    device: Dict, device_type: str, colors: dict, selected_device: Dict = None
+):
+    """PIN management, OTA firmware update, and device removal for a single device."""
     device_id = device.get("device_id")
     user_id = app.storage.user.get("user_id")
 
     from api.services.ota_service import OtaService
 
     ota_svc = OtaService()
+
+    # --- Spore-specific settings (moved here from the old Configuration tab) ---
+    if device_type == "spore":
+        _spore_hyphae_association_card(device)
+        _spore_pressure_source_card(device)
 
     # --- PIN Section ---
     with ui.card().classes("w-full p-4 q-mb-md"):
@@ -1512,8 +1619,64 @@ def _device_management_panel(device: Dict, device_type: str, colors: dict):
                     "outline color=negative size=sm"
                 )
 
-    # --- OTA Section ---
-    with ui.card().classes("w-full p-4"):
+    # --- Firmware Update (OTA) ---
+    _device_ota_card(device, device_type, user_id, ota_svc)
+
+    # --- Remove Device Section ---
+    with ui.card().classes("w-full p-4 q-mb-md").style("border: 1px solid #c10015"):
+        ui.label("Remove Device").classes("text-h6 text-negative q-mb-sm")
+        ui.label(
+            "Remove this device from Mycelium. Recorded readings are kept, but the "
+            "device disappears from the list. You can re-add it afterward."
+        ).classes("text-caption text-muted q-mb-sm")
+
+        def _do_remove():
+            try:
+                if device_type == "spore":
+                    delete_device_spore(device_id)
+                else:
+                    delete_device_hyphae(device_id)
+            except Exception as exc:
+                ui.notify(f"Remove failed: {exc}", type="negative")
+                return
+
+            ui.notify(f"Removed {device.get('device_name', 'device')}", type="positive")
+            confirm_dialog.close()
+
+            # Clear the detail selection and refresh the list/stat cards.
+            if selected_device is not None:
+                selected_device["type"] = None
+                selected_device["data"] = None
+                for key in (
+                    "_refresh_detail",
+                    "_spore_table",
+                    "_hyphae_table",
+                    "_stat_cards",
+                ):
+                    ref = selected_device.get(key)
+                    if ref is not None:
+                        try:
+                            ref.refresh()
+                        except Exception:
+                            pass
+
+        with ui.dialog() as confirm_dialog, ui.card():
+            ui.label(
+                f"Remove '{device.get('device_name', 'this device')}' from Mycelium?"
+            ).classes("text-body1")
+            with ui.row().classes("justify-end gap-2 w-full"):
+                ui.button("Cancel", on_click=confirm_dialog.close).props("flat")
+                ui.button("Remove", color="negative", on_click=_do_remove)
+
+        ui.button(
+            "Remove Device", icon="delete_forever", on_click=confirm_dialog.open
+        ).props("color=negative outline")
+
+
+def _device_ota_card(device: Dict, device_type: str, user_id, ota_svc):
+    """Firmware Update (OTA) card for the device management panel."""
+    device_id = device.get("device_id")
+    with ui.card().classes("w-full p-4 q-mb-md"):
         ui.label("Firmware Update (OTA)").classes("text-h6 q-mb-sm")
 
         # Check PIN availability
@@ -1643,7 +1806,7 @@ def _mini_stat(label: str, value: str, accent: str):
         ui.label(label).classes("text-caption text-muted")
 
 
-async def _run_mdns_discovery(colors: dict, stat_cards=None):
+async def _run_mdns_discovery(colors: dict, stat_cards=None, selected_device=None):
     """Run mDNS discovery and display results in a dialog."""
     rooms = _room_options()
 
@@ -1722,6 +1885,19 @@ async def _run_mdns_discovery(colors: dict, stat_cards=None):
                                             )
                                             if stat_cards:
                                                 stat_cards.refresh()
+                                            # Refresh the device table so the new
+                                            # device shows up in the list immediately.
+                                            if selected_device is not None:
+                                                tbl = selected_device.get(
+                                                    "_spore_table"
+                                                    if dev_type == "spore"
+                                                    else "_hyphae_table"
+                                                )
+                                                if tbl is not None:
+                                                    try:
+                                                        tbl.refresh()
+                                                    except Exception:
+                                                        pass
                                         else:
                                             errors = "; ".join(
                                                 result.get("errors", ["Unknown error"])

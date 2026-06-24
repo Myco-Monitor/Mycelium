@@ -5,6 +5,7 @@ This module provides functions for interacting with the device_spore table
 in the Mycelium database.
 """
 
+import re
 from typing import Dict, List, Optional, Any
 
 from storage.db_utils import (
@@ -13,6 +14,22 @@ from storage.db_utils import (
     execute_update,
     get_timestamp,
 )
+
+# Bare device label (spore-NNNN / hyphae-NNNN) with no domain suffix.
+_DEVICE_LABEL = re.compile(r"^(?:spore|hyphae)-\d{4}$", re.IGNORECASE)
+
+
+def normalize_device_host(host: str) -> str:
+    """Append '.local' to a bare 'spore-NNNN'/'hyphae-NNNN' label.
+
+    Device TLS certs have a SAN of '<name>.local'; connecting to the bare label
+    fails verification and floods the device log with handshake fatal alerts.
+    Anything else (IPs, FQDNs, host:port simulator entries) is left untouched.
+    """
+    host = (host or "").strip()
+    if _DEVICE_LABEL.match(host):
+        return f"{host}.local"
+    return host
 
 
 def create_device_spore(
@@ -41,8 +58,9 @@ def create_device_spore(
     Returns:
         int: ID of the newly created device
     """
+    hostname = normalize_device_host(hostname)
     query = """
-    INSERT INTO device_spore (room_id, device_name, hostname, mac_address, 
+    INSERT INTO device_spore (room_id, device_name, hostname, mac_address,
                              hyphae_id, hyphae_present, firmware_version, is_online)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     """
@@ -165,7 +183,7 @@ def update_device_spore(
 
     if hostname is not None:
         update_fields.append("hostname = ?")
-        params.append(hostname)
+        params.append(normalize_device_host(hostname))
 
     if firmware_version is not None:
         update_fields.append("firmware_version = ?")

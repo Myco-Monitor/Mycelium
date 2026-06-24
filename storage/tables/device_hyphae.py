@@ -7,6 +7,7 @@ in the Mycelium database.
 
 from typing import Dict, List, Optional, Any
 
+from storage.tables.device_spore import normalize_device_host
 from storage.db_utils import (
     execute_query,
     execute_insert,
@@ -41,8 +42,9 @@ def create_device_hyphae(
     Returns:
         int: ID of the newly created device
     """
+    hostname = normalize_device_host(hostname)
     query = """
-    INSERT INTO device_hyphae (room_id, device_name, hostname, mac_address, 
+    INSERT INTO device_hyphae (room_id, device_name, hostname, mac_address,
                               mode_enabled, mode_operation, firmware_version, is_online)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     """
@@ -173,7 +175,7 @@ def update_device_hyphae(
 
     if hostname is not None:
         update_fields.append("hostname = ?")
-        params.append(hostname)
+        params.append(normalize_device_host(hostname))
 
     if firmware_version is not None:
         update_fields.append("firmware_version = ?")

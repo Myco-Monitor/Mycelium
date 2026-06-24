@@ -21,6 +21,7 @@ from api.services.pressure_service import PressureDataService
 from api.services.pressure_distribution_service import PressureDistributionService
 from api.services.alert_service import AlertService
 from api.services.notification_service import NotificationService
+from api.clients.base_client import is_resolution_error, RESOLUTION_GRACE
 from storage.tables.device_spore import (
     get_all_device_spore,
     update_device_status as update_spore_status,
@@ -243,7 +244,7 @@ class PollingService:
                         if device_id not in self.spore_service.clients:
                             await self.spore_service.initialize_client(device_id)
 
-                        # Get the latest reading
+                        # Get the latest reading (raises on failure)
                         await self.spore_service.get_latest_reading(device_id)
 
                         # Update device status
@@ -257,8 +258,8 @@ class PollingService:
                             f"Error polling Spore device {device_id}: {e}"
                         )
 
-                        # Update device status
-                        self._update_device_status("spore", device_id, False)
+                        # Update device status (error drives transient-vs-real handling)
+                        self._update_device_status("spore", device_id, False, e)
 
                 # Sleep until the next polling interval
                 await asyncio.sleep(self._get_polling_interval("spore"))
@@ -293,7 +294,7 @@ class PollingService:
                         if device_id not in self.hyphae_service.clients:
                             await self.hyphae_service.initialize_client(device_id)
 
-                        # Get the latest reading
+                        # Get the latest reading (raises on failure)
                         await self.hyphae_service.get_latest_reading(device_id)
 
                         # Update device status
@@ -307,8 +308,8 @@ class PollingService:
                             f"Error polling Hyphae device {device_id}: {e}"
                         )
 
-                        # Update device status
-                        self._update_device_status("hyphae", device_id, False)
+                        # Update device status (error drives transient-vs-real handling)
+                        self._update_device_status("hyphae", device_id, False, e)
 
                 # Sleep until the next polling interval
                 await asyncio.sleep(self._get_polling_interval("hyphae"))
@@ -497,7 +498,9 @@ class PollingService:
         status = self.device_status[device_type][device_id]
         return datetime.now() >= status["next_poll"]
 
-    def _update_device_status(self, device_type: str, device_id: str, success: bool):
+    def _update_device_status(
+        self, device_type: str, device_id: str, success: bool, error=None
+    ):
         """
         Update the status of a device.
 
@@ -505,6 +508,8 @@ class PollingService:
             device_type (str): Type of device
             device_id (str): ID of the device
             success (bool): Whether the polling was successful
+            error (Exception, optional): The failure cause, used to tell a
+                transient mDNS resolution miss from a genuine outage.
         """
         # Initialize the status dictionary if needed
         if device_id not in self.device_status[device_type]:
@@ -512,60 +517,62 @@ class PollingService:
                 "online": False,
                 "last_success": None,
                 "failures": 0,
+                "resolution_misses": 0,
                 "next_poll": datetime.now(),
             }
 
         status = self.device_status[device_type][device_id]
+        interval = self.polling_config[device_type]["interval"]
+        jitter = self.polling_config[device_type]["jitter"]
+
+        def _schedule(seconds):
+            status["next_poll"] = datetime.now() + timedelta(seconds=max(1.0, seconds))
+
+        def _write_db(online: bool):
+            if device_type == "spore":
+                update_spore_status(device_id, 1 if online else 0)
+            elif device_type == "hyphae":
+                update_hyphae_status(device_id, 1 if online else 0)
 
         if success:
-            # Update status for successful polling
             status["online"] = True
             status["last_success"] = datetime.now()
             status["failures"] = 0
+            status["resolution_misses"] = 0
+            _schedule(interval + random.uniform(-jitter, jitter))
+            _write_db(True)
 
-            # Schedule next poll at the regular interval
-            interval = self.polling_config[device_type]["interval"]
-            jitter = self.polling_config[device_type]["jitter"]
-            status["next_poll"] = datetime.now() + timedelta(
-                seconds=interval + random.uniform(-jitter, jitter)
-            )
+        elif is_resolution_error(error):
+            # Transient mDNS glitch — Avahi briefly failed to resolve the .local
+            # name, the device itself is probably fine. Retry at the normal cadence
+            # (no exponential backoff) and keep the device's current status through
+            # a short grace window so one missed lookup doesn't bench it.
+            status["resolution_misses"] = status.get("resolution_misses", 0) + 1
+            _schedule(interval + random.uniform(-jitter, jitter))
+            if status["resolution_misses"] >= RESOLUTION_GRACE:
+                status["online"] = False
+                _write_db(False)
+            # else: within grace — leave online state and DB untouched
 
-            # Update device status in the database
-            if device_type == "spore":
-                update_spore_status(device_id, 1)
-            elif device_type == "hyphae":
-                update_hyphae_status(device_id, 1)
         else:
-            # Update status for failed polling
+            # Genuine failure (resolved host, refused/timeout/HTTP error). Mark
+            # offline and back off exponentially.
             status["online"] = False
             status["failures"] += 1
-
-            # Calculate backoff time
+            status["resolution_misses"] = 0
             backoff_factor = self.polling_config[device_type]["backoff_factor"]
             max_backoff = self.polling_config[device_type]["max_backoff"]
-
             backoff = min(
-                self.polling_config[device_type]["interval"]
-                * (backoff_factor ** status["failures"]),
+                interval * (backoff_factor ** status["failures"]),
                 max_backoff,
             )
-
-            # Add some jitter to prevent thundering herd
-            jitter = self.polling_config[device_type]["jitter"]
-            backoff += random.uniform(-jitter, jitter)
-
-            # Schedule next poll with backoff
-            status["next_poll"] = datetime.now() + timedelta(seconds=backoff)
-
-            # Update device status in the database
-            if device_type == "spore":
-                update_spore_status(device_id, 0)
-            elif device_type == "hyphae":
-                update_hyphae_status(device_id, 0)
+            _schedule(backoff + random.uniform(-jitter, jitter))
+            _write_db(False)
 
         self.logger.debug(
             f"Updated status for {device_type} device {device_id}: "
             f"online={status['online']}, failures={status['failures']}, "
+            f"resolution_misses={status['resolution_misses']}, "
             f"next_poll={status['next_poll'].isoformat()}"
         )
 

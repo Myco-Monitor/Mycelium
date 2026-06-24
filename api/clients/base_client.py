@@ -12,11 +12,14 @@ Features include:
 
 import ssl
 import time
+import socket
 import random
 import logging
 import asyncio
+import functools
 from pathlib import Path
 import aiohttp
+from aiohttp.abc import AbstractResolver
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass
 from enum import Enum
@@ -44,6 +47,80 @@ def create_device_ssl_context() -> ssl.SSLContext:
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
+
+
+# Consecutive transient resolution misses tolerated before a device is marked
+# offline. Avahi can briefly fail to resolve a .local name even while the device
+# is up, so this grace keeps a momentary mDNS glitch from flapping the device.
+RESOLUTION_GRACE = 3
+
+
+def is_resolution_error(error) -> bool:
+    """True if an error looks like a transient name-resolution (mDNS) failure.
+
+    A device that is actually down fails differently (connection refused / timeout
+    to a resolved IP), so callers can fast-retry resolution glitches while letting
+    genuine failures take the normal exponential-backoff path.
+    """
+    if error is None:
+        return False
+    text = str(error).lower()
+    return any(
+        marker in text
+        for marker in (
+            "dns server returned",  # systemd-resolved SERVFAIL on .local
+            "temporary failure in name",  # EAI_AGAIN
+            "name or service not known",  # EAI_NONAME
+            "name resolution",
+            "getaddrinfo",
+        )
+    )
+
+
+class _SystemResolver(AbstractResolver):
+    """Resolve names through the OS resolver (glibc getaddrinfo / nss-mdns).
+
+    Under uvloop (used by uvicorn/NiceGUI), aiohttp's default resolver delegates
+    to libuv's native getaddrinfo, which fails on mDNS .local names in this app —
+    while the sync `requests` path, which uses glibc getaddrinfo, resolves the
+    very same names fine. Running socket.getaddrinfo in a thread routes the async
+    client through that working glibc/Avahi path so .local resolution succeeds.
+    """
+
+    async def resolve(
+        self, host: str, port: int = 0, family: int = socket.AF_INET
+    ) -> List[Dict[str, Any]]:
+        loop = asyncio.get_event_loop()
+        infos = await loop.run_in_executor(
+            None,
+            functools.partial(
+                socket.getaddrinfo,
+                host,
+                port,
+                family,
+                socket.SOCK_STREAM,
+            ),
+        )
+        results: List[Dict[str, Any]] = []
+        for fam, _type, proto, _canonname, sockaddr in infos:
+            results.append(
+                {
+                    "hostname": host,
+                    "host": sockaddr[0],
+                    "port": sockaddr[1],
+                    "family": fam,
+                    "proto": proto,
+                    "flags": socket.AI_NUMERICHOST,
+                }
+            )
+        return results
+
+    async def close(self) -> None:
+        pass
+
+
+# Shared, stateless resolver instance for all device connectors.
+SYSTEM_RESOLVER = _SystemResolver()
 
 
 class ApiErrorType(Enum):
@@ -176,6 +253,12 @@ class BaseApiClient:
                 limit=20,
                 force_close=False,
                 ssl=ssl_ctx,
+                # Devices are IPv4-only and resolved via mDNS (.local). Forcing
+                # AF_INET avoids the AAAA lookup, which mdns4_minimal can't answer.
+                family=socket.AF_INET,
+                # Force glibc/Avahi resolution instead of uvloop's native resolver,
+                # which fails on .local names under uvicorn. See _SystemResolver.
+                resolver=SYSTEM_RESOLVER,
             )
             self.session = aiohttp.ClientSession(
                 timeout=aiohttp.ClientTimeout(total=self.timeout),
