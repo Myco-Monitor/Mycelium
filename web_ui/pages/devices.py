@@ -7,6 +7,7 @@ configuration, relay state, schedule, and dynamic control views.
 """
 
 import re
+import asyncio
 import subprocess
 import logging
 from pathlib import Path
@@ -14,7 +15,7 @@ from typing import Optional, Dict, List
 
 import requests
 
-from nicegui import ui, app
+from nicegui import ui, app, run
 from web_ui.layout import page_layout, back_to_dashboard
 from web_ui.theme import get_colors, STATUS_COLORS
 from web_ui.format import fmt_datetime
@@ -239,14 +240,69 @@ def store_complete_hyphae_device_data(ip: str, room_id, pin=None) -> Dict:
         return {"success": False, "errors": errors}
 
 
-def refresh_spore_device_data(device_id, ip: str) -> Optional[Dict]:
-    """Refresh data for an existing Spore device."""
-    return store_complete_spore_device_data(ip, None)
+def refresh_spore_device_data(device_id, ip: str) -> Dict:
+    """Re-poll an existing Spore device and update its status/info in the DB.
+
+    Unlike store_complete_spore_device_data() (the *add* path), this updates a
+    device that already exists: it contacts the device, refreshes online status,
+    last-seen time, and any changed name/firmware. Marks offline if unreachable.
+    """
+    from storage.tables.device_spore import (
+        set_device_online,
+        update_device_spore,
+        update_device_status,
+    )
+
+    info = fetch_spore_info(ip)
+    config = fetch_spore_config(ip) or {}
+    reachable = info is not None
+
+    if not reachable:
+        # Keep last_update meaning "last successful contact" (see set_device_online).
+        set_device_online(device_id, 0)
+        return {"success": False, "errors": [f"{ip} unreachable."]}
+
+    # Online: bump is_online + last_update, then sync any changed metadata.
+    update_device_status(device_id, 1)
+    device_name = config.get("device_name") or info.get("device_name")
+    firmware = info.get("firmware_version") or config.get("firmware_version")
+    if device_name or firmware:
+        update_device_spore(
+            device_id,
+            device_name=device_name or None,
+            firmware_version=firmware or None,
+        )
+    return {"success": True, "errors": []}
 
 
-def refresh_hyphae_device_data(device_id, ip: str) -> Optional[Dict]:
-    """Refresh data for an existing Hyphae device."""
-    return store_complete_hyphae_device_data(ip, None)
+def refresh_hyphae_device_data(device_id, ip: str) -> Dict:
+    """Re-poll an existing Hyphae device and update its status/info in the DB.
+
+    Counterpart to refresh_spore_device_data() for Hyphae controllers.
+    """
+    from storage.tables.device_hyphae import (
+        set_device_online,
+        update_device_hyphae,
+        update_device_status,
+    )
+
+    info = fetch_hyphae_config(ip)
+    reachable = info is not None
+
+    if not reachable:
+        set_device_online(device_id, 0)
+        return {"success": False, "errors": [f"{ip} unreachable."]}
+
+    update_device_status(device_id, 1)
+    device_name = info.get("device_name")
+    firmware = info.get("firmware_version")
+    if device_name or firmware:
+        update_device_hyphae(
+            device_id,
+            device_name=device_name or None,
+            firmware_version=firmware or None,
+        )
+    return {"success": True, "errors": []}
 
 
 # Hostname validation pattern. Accepts an mDNS hostname (spore-1234.local),
@@ -561,21 +617,36 @@ def _build_spore_panel(colors, selected_device, tabs, detail_tab, stat_cards):
             on_click=lambda: _open_add_spore_dialog(spore_table, stat_cards),
         ).props("color=primary")
 
-        def refresh_spore():
+        async def refresh_spore():
             devices = _safe_get_spore_devices()
             if not devices:
                 ui.notify("No Spore devices to refresh.", type="info")
                 return
-            success, errors = 0, 0
-            for d in devices:
-                try:
-                    result = refresh_spore_device_data(d["device_id"], d["hostname"])
-                    if result.get("success"):
-                        success += 1
-                    else:
-                        errors += 1
-                except Exception:
-                    errors += 1
+            # Each device fetch is blocking (requests, up to ~5s per call, and an
+            # unreachable device burns the full timeout). Run them off the event
+            # loop and concurrently so the websocket heartbeat keeps flowing
+            # (otherwise the UI shows "connection lost") and N devices don't add up.
+            progress = ui.notification(
+                f"Refreshing {len(devices)} Spore device(s)…",
+                spinner=True,
+                timeout=None,
+            )
+            try:
+                results = await asyncio.gather(
+                    *(
+                        run.io_bound(
+                            refresh_spore_device_data, d["device_id"], d["hostname"]
+                        )
+                        for d in devices
+                    ),
+                    return_exceptions=True,
+                )
+            finally:
+                progress.dismiss()
+            success = sum(
+                1 for r in results if isinstance(r, dict) and r.get("success")
+            )
+            errors = len(results) - success
             spore_table.refresh()
             stat_cards.refresh()
             if errors == 0:
@@ -752,21 +823,33 @@ def _build_hyphae_panel(colors, selected_device, tabs, detail_tab, stat_cards):
             on_click=lambda: _open_add_hyphae_dialog(hyphae_table, stat_cards),
         ).props("color=primary")
 
-        def refresh_hyphae():
+        async def refresh_hyphae():
             devices = _safe_get_hyphae_devices()
             if not devices:
                 ui.notify("No Hyphae devices to refresh.", type="info")
                 return
-            success, errors = 0, 0
-            for d in devices:
-                try:
-                    result = refresh_hyphae_device_data(d["device_id"], d["hostname"])
-                    if result.get("success"):
-                        success += 1
-                    else:
-                        errors += 1
-                except Exception:
-                    errors += 1
+            # Blocking fetches off the event loop, concurrently — see refresh_spore.
+            progress = ui.notification(
+                f"Refreshing {len(devices)} Hyphae device(s)…",
+                spinner=True,
+                timeout=None,
+            )
+            try:
+                results = await asyncio.gather(
+                    *(
+                        run.io_bound(
+                            refresh_hyphae_device_data, d["device_id"], d["hostname"]
+                        )
+                        for d in devices
+                    ),
+                    return_exceptions=True,
+                )
+            finally:
+                progress.dismiss()
+            success = sum(
+                1 for r in results if isinstance(r, dict) and r.get("success")
+            )
+            errors = len(results) - success
             hyphae_table.refresh()
             stat_cards.refresh()
             if errors == 0:
