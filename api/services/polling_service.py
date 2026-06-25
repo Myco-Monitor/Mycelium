@@ -246,11 +246,24 @@ class PollingService:
                         if device_id not in self.spore_service.clients:
                             await self.spore_service.initialize_client(device_id)
 
+                        # Was this Spore offline before this (successful) poll?
+                        was_online = (
+                            self.device_status["spore"]
+                            .get(device_id, {})
+                            .get("online", False)
+                        )
+
                         # Get the latest reading (raises on failure)
                         await self.spore_service.get_latest_reading(device_id)
 
                         # Update device status
                         self._update_device_status("spore", device_id, True)
+
+                        # On an offline->online transition, push the current ambient
+                        # pressure so a reconnected Spore isn't stuck on a stale value
+                        # when the pressure itself hasn't changed.
+                        if not was_online:
+                            await self.pressure_distribution.resend_to_spore(device)
 
                         self.logger.debug(
                             f"Successfully polled Spore device {device_id}"

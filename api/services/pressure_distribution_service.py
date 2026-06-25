@@ -43,6 +43,54 @@ class PressureDistributionService:
         self._last_sent: Dict[int, int] = {}
         # Coarse per-Hyphae guard (whole hPa) to skip the sweep when unchanged.
         self._last_pressure: Dict[int, int] = {}
+        # Most recent weather reading (sea_level_hpa, grnd_level_hpa), so a Spore
+        # that just came online can be refreshed without waiting for the next poll.
+        self._last_weather: Optional[tuple] = None
+
+    def _weather_value_for(
+        self,
+        spore: Dict[str, Any],
+        sea_level_hpa: Optional[float],
+        grnd_level_hpa: Optional[float],
+    ) -> Optional[float]:
+        """Pressure to send a Spore from a weather reading: grnd_level if present,
+        else altitude-adjusted station pressure, else None (no usable value)."""
+        if grnd_level_hpa is not None:
+            return grnd_level_hpa
+        if sea_level_hpa is not None and spore.get("altitude_m") is not None:
+            return sea_level_to_station_pressure(sea_level_hpa, spore["altitude_m"])
+        return None
+
+    async def resend_to_spore(self, spore: Dict[str, Any]):
+        """Force the current ambient pressure to a Spore that just came online.
+
+        A freshly-online Spore may hold a stale value (it likely rebooted), and if
+        the pressure hasn't changed since it went offline the normal de-dup would
+        skip it. So push the latest known value once, bypassing the de-dup:
+          - Hyphae-linked Spore  -> its Hyphae's last reported pressure.
+          - Weather Spore        -> the last weather reading (grnd/altitude).
+        """
+        device_id = spore.get("device_id")
+        hyphae_id = spore.get("hyphae_id")
+
+        if hyphae_id:
+            value = self._last_pressure.get(hyphae_id)
+        elif spore.get("weather_pressure_enabled") and self._last_weather is not None:
+            value = self._weather_value_for(spore, *self._last_weather)
+        else:
+            value = None
+
+        if value is None:
+            return  # nothing known yet to send
+
+        # Drop the de-dup so this always sends, even if the value is unchanged.
+        if device_id is not None:
+            self._last_sent.pop(device_id, None)
+        if await self._push_pressure_to_spore(spore, value):
+            self.logger.info(
+                f"Resent pressure {int(round(value))} hPa to reconnected Spore "
+                f"{spore.get('device_name', device_id)}"
+            )
 
     async def distribute_pressure(self, hyphae_id: int, pressure_hpa: float):
         """
@@ -102,6 +150,10 @@ class PressureDistributionService:
             sea_level_hpa: OWM main.pressure (sea-level-reduced), may be None.
             grnd_level_hpa: OWM main.grnd_level, may be None.
         """
+        # Remember the latest reading so a Spore reconnecting between polls can be
+        # refreshed immediately (see resend_to_spore).
+        self._last_weather = (sea_level_hpa, grnd_level_hpa)
+
         spores = get_all_device_spore()
         eligible = [
             s
@@ -116,13 +168,8 @@ class PressureDistributionService:
 
         tasks = []
         for spore in eligible:
-            if grnd_level_hpa is not None:
-                pressure_hpa = grnd_level_hpa
-            elif sea_level_hpa is not None and spore.get("altitude_m") is not None:
-                pressure_hpa = sea_level_to_station_pressure(
-                    sea_level_hpa, spore["altitude_m"]
-                )
-            else:
+            pressure_hpa = self._weather_value_for(spore, sea_level_hpa, grnd_level_hpa)
+            if pressure_hpa is None:
                 # No usable pressure for this Spore (no grnd_level, no altitude).
                 continue
 
