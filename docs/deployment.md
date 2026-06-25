@@ -19,8 +19,8 @@ How Mycelium secures data, and what you (or an end user) need to do at deploy ti
 Mycelium serves HTTPS by default, so logins/sessions are encrypted out of the box:
 
 ```bash
-python run.py                    # serves https://localhost:8443, self-signed cert
-python run.py --host 0.0.0.0     # reachable across the LAN
+python run.py                    # serves https://mycelium.local:8443 across the LAN, self-signed cert
+python run.py --localhost        # restrict to this machine (https://localhost:8443)
 python run.py --http             # plain HTTP (INSECURE) — avoid except local testing
 ```
 
@@ -44,8 +44,29 @@ you reach it.
 When serving HTTPS on a non-loopback host, Mycelium advertises **`mycelium.local`**
 over mDNS, so any computer on the LAN can browse to `https://mycelium.local:8443`
 (consistent with `spore-NNNN.local` / `hyphae-NNNN.local`). Requires the client
-OS to resolve `.local` (built in on macOS/Windows; install `avahi`/`nss-mdns` on
-Linux).
+OS to resolve `.local` (built in on macOS/iOS/Windows; install `avahi`/`nss-mdns`
+on Linux).
+
+> **Always include the port (`:8443`).** Mycelium listens on **8443**, not the
+> default HTTPS port 443. `https://mycelium.local` with no port makes the browser
+> try 443 and fail to connect — the address must be **`https://mycelium.local:8443`**
+> (likewise `https://<host-ip>:8443`). This trips up phones especially, since the
+> on-screen keyboard makes it easy to omit the `:8443`.
+
+> **Android phones may not resolve `.local`.** Android has no system-wide mDNS
+> resolver, so `https://mycelium.local:8443` often fails to load on a phone or
+> tablet even though it works from a Mac/Windows/Linux computer on the same
+> network. This is a limitation of the device, not of Mycelium — the mDNS record
+> is still being advertised correctly. Workarounds, in order of convenience:
+>
+> - **Use the host's IP instead of the name:** browse to
+>   `https://<mycelium-host-ip>:8443` (the server prints its LAN IP on startup;
+>   the cert's SAN already covers it, so HTTPS still validates once the CA is
+>   imported). A static/reserved DHCP lease for the host keeps that IP stable.
+> - **Assign a real hostname** on your router/DNS (e.g. a DHCP reservation with a
+>   name, or a Pi-hole/router DNS entry) and browse to that instead of `.local`.
+> - Some browsers/apps bundle their own mDNS resolver and work regardless; if one
+>   browser on the phone fails, another may succeed.
 
 ### Removing the browser warning — import the local CA once
 

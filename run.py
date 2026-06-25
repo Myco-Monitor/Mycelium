@@ -5,14 +5,19 @@ Mycelium Project Run Script
 This script starts the Mycelium web application (NiceGUI + FastAPI).
 
 Usage:
-    python run.py [--host HOST] [--port PORT] [--debug] [--dev]
+    python run.py [--host HOST] [--localhost] [--port PORT] [--debug] [--dev]
                   [--http] [--cert PATH] [--key PATH]
 
 HTTPS is the default (self-signed cert auto-generated on first run). Use --http
 only if you explicitly want an insecure plaintext server.
 
+By default the server binds to all interfaces (0.0.0.0) so other computers on
+the LAN can reach it as mycelium.local. Use --localhost to restrict it to this
+machine only.
+
 Options:
-    --host HOST     Interface to bind to (default: 127.0.0.1; use 0.0.0.0 for LAN)
+    --host HOST     Interface to bind to (default: 0.0.0.0, the whole LAN)
+    --localhost     Bind to loopback only (127.0.0.1); reachable from this PC only
     --port PORT     Port to bind to (default: 8443 HTTPS / 8051 with --http)
     --debug         Enable debug mode
     --dev           Development mode (auto-reload, verbose logging)
@@ -47,7 +52,7 @@ def load_config():
             "name": "Mycelium Farm Monitor",
             "version": __version__,
             "debug": False,
-            "host": "127.0.0.1",
+            "host": "0.0.0.0",
             "port": 8051,
         }
     }
@@ -126,7 +131,7 @@ def check_prerequisites():
 
 
 def start_nicegui(
-    host="127.0.0.1",
+    host="0.0.0.0",
     port=8051,
     debug=False,
     dev=False,
@@ -219,7 +224,13 @@ def main():
     parser.add_argument(
         "--host",
         default=None,
-        help="Interface to bind to (default: 127.0.0.1; use 0.0.0.0 for the whole LAN)",
+        help="Interface to bind to (default: 0.0.0.0, the whole LAN)",
+    )
+    parser.add_argument(
+        "--localhost",
+        action="store_true",
+        help="Bind to loopback only (127.0.0.1) so the UI is reachable only from "
+        "this machine. Overrides the default 0.0.0.0 (whole-LAN) binding.",
     )
     parser.add_argument(
         "--port",
@@ -269,7 +280,14 @@ def main():
     else:
         https = True
 
-    host = args.host or app_config.get("host", "127.0.0.1")
+    # --host (explicit interface) wins; --localhost forces loopback-only;
+    # otherwise fall back to the config / default (0.0.0.0, the whole LAN).
+    if args.host:
+        host = args.host
+    elif args.localhost:
+        host = "127.0.0.1"
+    else:
+        host = app_config.get("host", "0.0.0.0")
     if args.port:
         port = args.port
     elif https:

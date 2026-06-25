@@ -148,18 +148,18 @@ Mycelium/
 
 4. **Start the application** — HTTPS is the default:
 
-   Local use, same machine:
+   Over the network (reachable from other devices) — **the default:**
    ```bash
    python run.py
-   ```
-
-   Over the network (reachable from other devices) — **recommended for real use:**
-   ```bash
-   python run.py --host 0.0.0.0
    ```
    Serves HTTPS on port 8443, encrypts logins, auto-generates a self-signed
    certificate on first run, and advertises `mycelium.local` over mDNS so any
    computer on the LAN can reach it.
+
+   Same machine only (loopback) — opt in with `--localhost`:
+   ```bash
+   python run.py --localhost
+   ```
 
    Development mode (hot reload):
    ```bash
@@ -173,15 +173,24 @@ Mycelium/
 
    | How you started it | Open the browser on… | URL |
    |--------------------|----------------------|-----|
-   | `python run.py` — HTTPS, **recommended** ✅ | the **same machine** running Mycelium | `https://localhost:8443` (or `https://127.0.0.1:8443`) |
-   | `python run.py --http` — plaintext, **avoid** ⚠️ | the **same machine** running Mycelium | `http://localhost:8051` (or `http://127.0.0.1:8051`) |
-   | `python run.py --host 0.0.0.0` — HTTPS on the LAN, **recommended** ✅ | **any device on the same network** (phone, tablet, another computer) | `https://mycelium.local:8443` (or `https://<mycelium-host-ip>:8443`) |
-   | `python run.py --http --host 0.0.0.0` — plaintext, **avoid** ⚠️ | **any device on the same network** | `http://<mycelium-host-ip>:8051` |
+   | `python run.py` — HTTPS on the LAN, **recommended** ✅ | **any device on the same network** (phone, tablet, another computer) | `https://mycelium.local:8443` (or `https://<mycelium-host-ip>:8443`) |
+   | `python run.py --localhost` — HTTPS, loopback only | the **same machine** running Mycelium | `https://localhost:8443` (or `https://127.0.0.1:8443`) |
+   | `python run.py --http` — plaintext, **avoid** ⚠️ | **any device on the same network** | `http://<mycelium-host-ip>:8051` |
+   | `python run.py --http --localhost` — plaintext, loopback only ⚠️ | the **same machine** running Mycelium | `http://localhost:8051` (or `http://127.0.0.1:8051`) |
 
-   > **Default (`--host 127.0.0.1`) is loopback-only:** the UI is reachable **only
-   > from the machine running Mycelium** — other devices can't connect. To reach
-   > Mycelium from a different device (phone, laptop, etc.), start it with
-   > `--host 0.0.0.0`.
+   > **Always include the port (`:8443`).** Mycelium listens on **8443**, not the
+   > default HTTPS port 443, so `https://mycelium.local` with no port will fail to
+   > connect — type the full **`https://mycelium.local:8443`**. (Easy to drop the
+   > `:8443` on a phone keyboard.)
+   >
+   > **Default binds to `0.0.0.0` (the whole LAN):** the UI is reachable from any
+   > device on the same network. To restrict it to **only the machine running
+   > Mycelium** (loopback), start it with `--localhost`.
+   >
+   > **On an Android phone/tablet, `mycelium.local` may not load** — Android has
+   > no system-wide `.local` (mDNS) resolver. Use the host's IP instead
+   > (`https://<mycelium-host-ip>:8443`); it works the same and the cert covers it.
+   > See [docs/deployment.md](docs/deployment.md#mycelium-local) for details.
    >
    > First HTTPS run generates a per-install **local CA**. On **each device you
    > browse from**, import `config/mycelium_local_ca.pem` into the browser once
@@ -196,7 +205,8 @@ Mycelium/
 python run.py [OPTIONS]
 
 Options:
-  --host HOST     Interface to bind to (default: 127.0.0.1; use 0.0.0.0 for the LAN)
+  --host HOST     Interface to bind to (default: 0.0.0.0, the whole LAN)
+  --localhost     Bind to loopback only (127.0.0.1); reachable from this PC only
   --port PORT     Port to bind to (default: 8443 HTTPS / 8051 with --http)
   --debug         Enable debug mode
   --dev           Development mode (hot reload, verbose logging)
@@ -205,8 +215,8 @@ Options:
   --key PATH      TLS private key (PEM)
 ```
 
-For network deployments, run with `--host 0.0.0.0` and reach the UI at
-`https://mycelium.local:8443`. HTTPS is on by default, so logins are encrypted; see
+By default the server is reachable across the LAN at `https://mycelium.local:8443`
+(use `--localhost` to restrict it to the host machine). HTTPS is on by default, so logins are encrypted; see
 [docs/deployment.md](docs/deployment.md) for the full security model (TLS, secrets
 at rest, host hardening).
 
