@@ -36,6 +36,9 @@ from storage.tables.relay_settings import get_device_relay_settings
 from storage.tables.schedule_settings import get_device_schedule_settings
 from storage.tables.dynamic_settings import get_device_dynamic_settings
 from storage.tables.device_pins import store_device_pin, has_stored_pin
+from storage.tables.readings_spore import get_latest_reading as get_latest_spore_reading
+from storage.tables.readings_hyphae import get_latest_relay_states
+from storage.tables.readings_pressure import get_latest_pressure
 
 logger = logging.getLogger(__name__)
 
@@ -1033,6 +1036,67 @@ def _open_add_hyphae_dialog(hyphae_table_refresh, stat_cards_refresh):
 
 
 # ---------------------------------------------------------------------------
+# Detail-panel data source helper (DB-first, live on demand)
+# ---------------------------------------------------------------------------
+
+
+def _panel_source_row(state: Dict, fetch_fn, body, *, as_of=None, stored=True):
+    """Render the data-source line + an on-demand "Refresh from device" button.
+
+    Detail panels read from the database by default so simply viewing a device
+    costs no network traffic. This row tells the user where the shown data came
+    from (stored vs. just-fetched-live) and lets them pull a fresh copy on
+    demand. The live fetch runs off the event loop so a slow/unreachable device
+    can't freeze the UI.
+
+    Args:
+        state: Per-panel dict holding {"live", "fetched"}; `body.refresh()` re-reads it.
+        fetch_fn: Zero-arg callable that performs the blocking device fetch.
+        body: The @ui.refreshable that renders the panel body.
+        as_of: Human-readable timestamp of the stored data (DB-first panels).
+        stored: False for panels with no persisted copy (diagnostics, Hyphae
+            config) — those are live-only and shown blank until refreshed.
+    """
+    with ui.row().classes("w-full items-center gap-2 q-mb-sm"):
+        if state.get("fetched"):
+            if state.get("live"):
+                ui.badge("Live from device", color="green")
+            else:
+                ui.badge("Device unreachable", color="red")
+                if stored and as_of:
+                    ui.label(f"showing stored data from {as_of}").classes(
+                        "text-caption text-muted"
+                    )
+        elif stored:
+            ui.badge("Stored", color="blue")
+            ui.label(f"as of {as_of}" if as_of else "from database").classes(
+                "text-caption text-muted"
+            )
+        else:
+            ui.badge("Not stored", color="grey")
+            ui.label("fetched from device on demand").classes("text-caption text-muted")
+
+        ui.space()
+
+        async def _do_refresh():
+            n = ui.notification("Fetching from device…", spinner=True, timeout=None)
+            try:
+                state["live"] = await run.io_bound(fetch_fn)
+            finally:
+                n.dismiss()
+            state["fetched"] = True
+            body.refresh()
+            if state["live"]:
+                ui.notify("Updated from device.", type="positive")
+            else:
+                ui.notify("Device unreachable.", type="warning")
+
+        ui.button(
+            "Refresh from device", icon="cloud_download", on_click=_do_refresh
+        ).props("outline dense")
+
+
+# ---------------------------------------------------------------------------
 # SPORE detail
 # ---------------------------------------------------------------------------
 
@@ -1061,61 +1125,101 @@ def _render_spore_detail(device: Dict, colors: dict, selected_device: Dict = Non
             _device_management_panel(device, "spore", colors, selected_device)
 
 
+def _spore_db_reading(device: Dict):
+    """Build a Spore reading view from the database (no device call).
+
+    Temp/humidity/CO2 come from readings_spore (filled by the ~60s poller).
+    Spore has no pressure sensor, so pressure is the linked Hyphae's latest
+    stored pressure when one is associated. Returns (reading, as_of) where
+    `reading` uses the same keys as the live /api/readings/latest payload, or
+    (None, None) when nothing has been polled yet.
+    """
+    device_id = device.get("device_id")
+    if not device_id:
+        return None, None
+    row = get_latest_spore_reading(device_id)
+    if not row:
+        return None, None
+
+    pressure = None
+    hyphae_id = device.get("hyphae_id")
+    if hyphae_id:
+        p = get_latest_pressure(hyphae_id)
+        if p:
+            pressure = p.get("pressure_hpa")
+
+    reading = {
+        "temperature": row.get("temp"),
+        "humidity": row.get("humidity"),
+        "co2": row.get("co2"),
+        "pressure": pressure,
+    }
+    return reading, _format_last_seen(row.get("reading_ts"))
+
+
 def _spore_readings_panel(device: Dict, colors: dict):
-    """Show latest sensor readings for a Spore device."""
-    ip = device.get("hostname", "")
-    # Skip the blocking live fetch for an offline device (it would just hang until
-    # timeout and freeze the UI event loop); show the offline state instead.
-    readings = (
-        fetch_spore_readings_latest(ip) if ip and device.get("is_online") else None
-    )
+    """Show latest sensor readings for a Spore device (DB-first, live on demand)."""
+    state = {"live": None, "fetched": False}
 
-    if not readings:
-        ui.label("Could not fetch sensor readings. Device may be offline.").classes(
-            "text-muted"
-        )
-        return
+    @ui.refreshable
+    def body():
+        if state["live"]:
+            readings = state["live"]
+            # /api/readings/latest returns a unix timestamp (0 pre-clock-sync).
+            try:
+                ts = int(readings.get("timestamp", 0))
+            except (TypeError, ValueError):
+                ts = 0
+            as_of = fmt_datetime(ts) if ts > 0 else "device clock not synced"
+        else:
+            readings, as_of = _spore_db_reading(device)
 
-    # /api/readings/latest returns a unix timestamp (0 until the device clock syncs).
-    ts = readings.get("timestamp", 0)
-    try:
-        ts = int(ts)
-    except (TypeError, ValueError):
-        ts = 0
-    when = fmt_datetime(ts) if ts > 0 else "Unknown (device clock not synced)"
-    ui.label(f"Last reading: {when}").classes("text-caption text-muted q-mb-md")
+        _panel_source_row(
+            state,
+            lambda: fetch_spore_readings_latest(device.get("hostname", "")),
+            body,
+            as_of=as_of,
+        )
 
-    temp_value, temp_unit = _fmt_temp(readings.get("temperature"), _temp_pref())
+        if not readings:
+            ui.label(
+                "No stored readings yet. Click “Refresh from device” to fetch live."
+            ).classes("text-muted")
+            return
 
-    with ui.row().classes("w-full gap-4 flex-wrap"):
-        _reading_card(
-            "Temperature",
-            temp_value,
-            temp_unit,
-            "thermostat",
-            colors["primary"],
-        )
-        _reading_card(
-            "Humidity",
-            _fmt_reading(readings.get("humidity"), 1),
-            "%",
-            "water_drop",
-            colors["primary"],
-        )
-        _reading_card(
-            "CO2",
-            _fmt_reading(readings.get("co2"), 0),
-            "ppm",
-            "co2",
-            colors["primary"],
-        )
-        _reading_card(
-            "Pressure",
-            _fmt_reading(readings.get("pressure"), 0),
-            "hPa",
-            "speed",
-            colors["primary"],
-        )
+        temp_value, temp_unit = _fmt_temp(readings.get("temperature"), _temp_pref())
+
+        with ui.row().classes("w-full gap-4 flex-wrap"):
+            _reading_card(
+                "Temperature",
+                temp_value,
+                temp_unit,
+                "thermostat",
+                colors["primary"],
+            )
+            _reading_card(
+                "Humidity",
+                _fmt_reading(readings.get("humidity"), 1),
+                "%",
+                "water_drop",
+                colors["primary"],
+            )
+            _reading_card(
+                "CO2",
+                _fmt_reading(readings.get("co2"), 0),
+                "ppm",
+                "co2",
+                colors["primary"],
+            )
+            _reading_card(
+                "Pressure",
+                _fmt_reading(readings.get("pressure"), 0),
+                "hPa",
+                "speed",
+                colors["primary"],
+            )
+
+    body()
 
 
 def _reading_card(label: str, value, unit: str, icon: str, accent: str):
@@ -1260,14 +1364,40 @@ def _spore_pressure_source_card(device: Dict):
 
 
 def _spore_diagnostics_panel(device: Dict, colors: dict):
-    """Show Spore diagnostics from /api/diagnostics (system, sensors, errors)."""
-    ip = device.get("hostname", "")
-    info = fetch_spore_info(ip) if ip and device.get("is_online") else None
+    """Show Spore diagnostics from /api/diagnostics (system, sensors, errors).
 
-    if not info:
-        ui.label("Could not fetch diagnostics. Device may be offline.").classes(
-            "text-muted"
+    Diagnostics are not persisted (by design — no diagnostics table), so this
+    panel never fetches automatically. It stays blank until the user clicks
+    "Refresh from device", keeping page views off the network.
+    """
+    state = {"live": None, "fetched": False}
+
+    @ui.refreshable
+    def body():
+        _panel_source_row(
+            state,
+            lambda: fetch_spore_info(device.get("hostname", "")),
+            body,
+            stored=False,
         )
+        _spore_diagnostics_body(device, state)
+
+    body()
+
+
+def _spore_diagnostics_body(device: Dict, state: Dict):
+    """Render the diagnostics cards once the device has been queried."""
+    info = state.get("live")
+    if not info:
+        if state.get("fetched"):
+            ui.label("Could not fetch diagnostics. Device may be offline.").classes(
+                "text-muted"
+            )
+        else:
+            ui.label(
+                "Diagnostics are read live from the device and are not stored. "
+                "Click “Refresh from device” to query it."
+            ).classes("text-muted")
         return
 
     system = info.get("system", {})
@@ -1391,10 +1521,14 @@ def _render_hyphae_detail(device: Dict, colors: dict, selected_device: Dict = No
 
 
 def _hyphae_system_panel(device: Dict, colors: dict):
-    """Show Hyphae system information."""
-    ip = device.get("hostname", "")
-    config = fetch_hyphae_config(ip) if ip and device.get("is_online") else None
+    """Show Hyphae system information.
 
+    Core device metadata (name/host/MAC/room/firmware) comes from the database,
+    so it always renders without a network call. The live "Configuration"
+    section (OWM key, frequencies, connected Spores) is not persisted, so it is
+    fetched only on demand via "Refresh from device".
+    """
+    # --- Device info (always from DB) ---
     with ui.card().classes("w-full p-4"):
         ui.label("Device Information").classes(
             "text-subtitle1 text-weight-bold q-mb-sm"
@@ -1405,8 +1539,31 @@ def _hyphae_system_panel(device: Dict, colors: dict):
         _kv("Room", device.get("room_name", "Unassigned"))
         _kv("Firmware", device.get("firmware_version", "Unknown"))
 
-    if config:
-        with ui.card().classes("w-full p-4 q-mt-md"):
+    # --- Live configuration (on demand only) ---
+    state = {"live": None, "fetched": False}
+
+    @ui.refreshable
+    def body():
+        _panel_source_row(
+            state,
+            lambda: fetch_hyphae_config(device.get("hostname", "")),
+            body,
+            stored=False,
+        )
+        config = state.get("live")
+        if not config:
+            if state.get("fetched"):
+                ui.label("Could not fetch live configuration from device.").classes(
+                    "text-muted"
+                )
+            else:
+                ui.label(
+                    "Live configuration is read from the device on demand. "
+                    "Click “Refresh from device” to query it."
+                ).classes("text-muted")
+            return
+
+        with ui.card().classes("w-full p-4"):
             ui.label("Configuration").classes("text-subtitle1 text-weight-bold q-mb-sm")
             _kv("OWM API Key", config.get("owm_api_key", "N/A"))
             _kv("ZIP Code", config.get("zip_code", "N/A"))
@@ -1421,228 +1578,319 @@ def _hyphae_system_panel(device: Dict, colors: dict):
             connected = config.get("connected_spore_devices", [])
             if connected:
                 _kv("Connected Spores", ", ".join(connected))
-    else:
-        ui.label("Could not fetch live configuration from device.").classes(
-            "text-muted q-mt-md"
-        )
+
+    with ui.column().classes("w-full q-mt-md"):
+        body()
 
 
 def _hyphae_relay_config_panel(device: Dict, colors: dict):
-    """Show relay configuration (6 relays, 7 groups)."""
-    ip = device.get("hostname", "")
+    """Show relay configuration (6 relays, 7 groups) — DB-first, live on demand."""
     device_id = device.get("device_id")
+    state = {"live": None, "fetched": False}
 
-    # Try live data first (only if online), fall back to database
-    relay_config = (
-        fetch_hyphae_relay_config(ip) if ip and device.get("is_online") else None
-    )
-    relays = relay_config.get("relays", []) if relay_config else []
+    def _db_relays():
+        rows = get_device_relay_settings(device_id) if device_id else None
+        if not rows:
+            return []
+        return [
+            {
+                "id": str(r.get("relay_number", "")),
+                "name": r.get("relay_name", f"Relay {r.get('relay_number', '?')}"),
+                "group": r.get("group_num", 0),
+                "relay_number": r.get("relay_number", 0),
+                "enabled": r.get("group_num", 0) != 0,
+            }
+            for r in rows
+        ]
 
-    if not relays and device_id:
-        db_relays = get_device_relay_settings(device_id)
-        if db_relays:
-            relays = [
-                {
-                    "id": str(r.get("relay_number", "")),
-                    "name": r.get("relay_name", f"Relay {r.get('relay_number', '?')}"),
-                    "group": r.get("group_num", 0),
-                    "relay_number": r.get("relay_number", 0),
-                    "enabled": r.get("group_num", 0) != 0,
-                }
-                for r in db_relays
-            ]
+    @ui.refreshable
+    def body():
+        relays = state["live"].get("relays", []) if state["live"] else _db_relays()
 
-    if not relays:
-        ui.label("No relay configuration available.").classes("text-muted")
-        return
-
-    ui.label(f"{len(relays)} relays configured").classes(
-        "text-caption text-muted q-mb-md"
-    )
-
-    with ui.row().classes("w-full gap-4 flex-wrap"):
-        for relay in relays:
-            with ui.card().classes("p-4 min-w-48 flex-1"):
-                enabled = relay.get("enabled", False)
-                ui.label(
-                    f"Relay {relay.get('id', '?')}: {relay.get('name', 'Unnamed')}"
-                ).classes("text-subtitle2 text-weight-bold")
-                _kv("Group", str(relay.get("group", "N/A")))
-                if relay.get("group_description"):
-                    _kv("Description", relay["group_description"])
-                ui.badge(
-                    "Enabled" if enabled else "Disabled",
-                    color="green" if enabled else "grey",
-                )
-
-
-def _hyphae_relay_state_panel(device: Dict, colors: dict):
-    """Show current relay states (ON/OFF) for all 6 relays."""
-    ip = device.get("hostname", "")
-    state_data = (
-        fetch_hyphae_relay_state(ip) if ip and device.get("is_online") else None
-    )
-    relays = state_data.get("relays", []) if state_data else []
-
-    if state_data:
-        with ui.row().classes("w-full gap-4 flex-wrap q-mb-md"):
-            _mini_stat(
-                "Total", str(state_data.get("total_relays", 0)), colors["primary"]
-            )
-            _mini_stat(
-                "ON", str(state_data.get("relays_on", 0)), STATUS_COLORS["online"]
-            )
-            _mini_stat(
-                "OFF", str(state_data.get("relays_off", 0)), STATUS_COLORS["offline"]
-            )
-
-        if state_data.get("system_mode"):
-            ui.label(f"System Mode: {state_data['system_mode']}").classes(
-                "text-caption text-muted"
-            )
-        if state_data.get("operation_mode"):
-            ui.label(f"Operation Mode: {state_data['operation_mode']}").classes(
-                "text-caption text-muted"
-            )
-
-    with ui.row().classes("w-full gap-4 flex-wrap"):
-        for i in range(1, 7):
-            relay = next((r for r in relays if int(r.get("id", 0)) == i), None)
-            is_on = relay.get("is_on", False) if relay else False
-            relay_name = relay.get("name", f"Relay {i}") if relay else f"Relay {i}"
-
-            with ui.card().classes("p-4 min-w-36 flex-1 text-center"):
-                color = STATUS_COLORS["online"] if is_on else STATUS_COLORS["offline"]
-                ui.icon("toggle_on" if is_on else "toggle_off", size="lg").style(
-                    f"color: {color}"
-                )
-                ui.label(relay_name).classes("text-subtitle2 q-mt-xs")
-                ui.badge(
-                    "ON" if is_on else "OFF",
-                    color="green" if is_on else "red",
-                ).classes("q-mt-xs")
-
-    if not relays and not state_data:
-        ui.label("Could not fetch relay state. Device may be offline.").classes(
-            "text-muted"
+        _panel_source_row(
+            state,
+            lambda: fetch_hyphae_relay_config(device.get("hostname", "")),
+            body,
         )
 
+        if not relays:
+            ui.label("No relay configuration available.").classes("text-muted")
+            return
 
-def _hyphae_schedule_panel(device: Dict, colors: dict):
-    """Show relay schedule settings (on/off times per group)."""
-    ip = device.get("hostname", "")
-    device_id = device.get("device_id")
-
-    # Try live data first (only if online)
-    schedule_data = (
-        fetch_hyphae_relay_schedule(ip) if ip and device.get("is_online") else None
-    )
-    groups = schedule_data.get("groups", []) if schedule_data else []
-
-    # Fall back to database
-    if not groups and device_id:
-        db_schedules = get_device_schedule_settings(device_id)
-        if db_schedules:
-            groups = [
-                {
-                    "group_id": s.get("group_num", 0),
-                    "group_name": f"Group {s.get('group_num', '?')}",
-                    "on_time": s.get("on_time", "N/A"),
-                    "off_time": s.get("off_time", "N/A"),
-                }
-                for s in db_schedules
-            ]
-
-    if not groups:
-        ui.label("No schedule configuration available.").classes("text-muted")
-        return
-
-    ui.label(f"{len(groups)} group schedule(s)").classes(
-        "text-caption text-muted q-mb-md"
-    )
-
-    with ui.row().classes("w-full gap-4 flex-wrap"):
-        for group in groups:
-            with ui.card().classes("p-4 min-w-48 flex-1"):
-                ui.label(
-                    f"Group {group.get('group_id', '?')}: {group.get('group_name', '')}"
-                ).classes("text-subtitle2 text-weight-bold")
-                _kv("On Time", str(group.get("on_time", "N/A")))
-                _kv("Off Time", str(group.get("off_time", "N/A")))
-
-
-def _hyphae_dynamic_panel(device: Dict, colors: dict):
-    """Show dynamic control settings (CO2/humidity/temp thresholds for groups 1-3)."""
-    ip = device.get("hostname", "")
-    device_id = device.get("device_id")
-
-    # Try live data first (only if online)
-    dynamic_data = (
-        fetch_hyphae_relay_dynamic(ip) if ip and device.get("is_online") else None
-    )
-    controls = dynamic_data.get("controls", []) if dynamic_data else []
-
-    # Fall back to database
-    if not controls and device_id:
-        db_dynamics = get_device_dynamic_settings(device_id)
-        if db_dynamics:
-            controls = [
-                {
-                    "relay_id": f"Group {d.get('group_num', '?')}",
-                    "relay_name": d.get("parameter", "Unknown").title(),
-                    "sensor_type": d.get("parameter", "Unknown").title(),
-                    "low_threshold": str(d.get("low_threshold", 0)),
-                    "high_threshold": str(d.get("high_threshold", 0)),
-                    "is_activate_high": d.get("behavior", 0) == 1,
-                    "behavior": "ACTIVATE HIGH"
-                    if d.get("behavior", 0) == 1
-                    else "ACTIVATE LOW",
-                    "activate": True,
-                }
-                for d in db_dynamics
-            ]
-
-    if not controls:
-        ui.label("No dynamic control configuration available.").classes("text-muted")
-        return
-
-    # Summary
-    total = len(controls)
-    active = len([c for c in controls if c.get("activate")])
-    sensor_types = list({c.get("sensor_type", "Unknown") for c in controls})
-
-    with ui.row().classes("w-full gap-4 flex-wrap q-mb-md"):
-        _mini_stat("Controls", str(total), colors["primary"])
-        _mini_stat("Active", str(active), STATUS_COLORS["online"])
-        _mini_stat("Sensor Types", str(len(sensor_types)), colors["primary"])
-
-    if sensor_types:
-        ui.label(f"Types: {', '.join(sensor_types)}").classes(
+        ui.label(f"{len(relays)} relays configured").classes(
             "text-caption text-muted q-mb-md"
         )
 
-    with ui.row().classes("w-full gap-4 flex-wrap"):
-        for control in controls:
-            is_active = control.get("activate", False)
-            with ui.card().classes("p-4 min-w-56 flex-1"):
-                ui.label(
-                    f"{control.get('relay_id', '')}: {control.get('relay_name', '')}"
-                ).classes("text-subtitle2 text-weight-bold")
-                _kv("Low Threshold", str(control.get("low_threshold", "N/A")))
-                _kv("High Threshold", str(control.get("high_threshold", "N/A")))
+        with ui.row().classes("w-full gap-4 flex-wrap"):
+            for relay in relays:
+                with ui.card().classes("p-4 min-w-48 flex-1"):
+                    enabled = relay.get("enabled", False)
+                    ui.label(
+                        f"Relay {relay.get('id', '?')}: {relay.get('name', 'Unnamed')}"
+                    ).classes("text-subtitle2 text-weight-bold")
+                    _kv("Group", str(relay.get("group", "N/A")))
+                    if relay.get("group_description"):
+                        _kv("Description", relay["group_description"])
+                    ui.badge(
+                        "Enabled" if enabled else "Disabled",
+                        color="green" if enabled else "grey",
+                    )
 
-                behavior_color = "green" if control.get("is_activate_high") else "blue"
-                ui.badge(control.get("behavior", "N/A"), color=behavior_color)
+    body()
 
-                if control.get("behavior_description"):
-                    ui.label(control["behavior_description"]).classes(
-                        "text-caption text-muted q-mt-xs"
-                    ).style("font-style: italic")
 
-                ui.badge(
-                    "Active" if is_active else "Inactive",
-                    color="green" if is_active else "grey",
-                ).classes("q-mt-xs")
+def _hyphae_relay_state_view(device: Dict, live: Optional[Dict]) -> Dict:
+    """Normalize relay state from either the live payload or the database.
+
+    Returns a uniform dict: per-relay {is_on, name}, on/off/total counts, the
+    system/operation mode strings, and an `as_of` time. The DB path reads the
+    latest stored state from readings_hyphae (filled by the poller), relay names
+    from relay_settings, and the modes from the device row — so it needs no
+    device call.
+    """
+    mode_map = {0: "Offline", 1: "Testing", 2: "Running"}
+    op_map = {0: "Schedule", 1: "Dynamic"}
+
+    relays: Dict[int, Dict] = {}
+    as_of = None
+
+    if live:
+        for r in live.get("relays", []):
+            try:
+                n = int(r.get("id", 0))
+            except (TypeError, ValueError):
+                continue
+            relays[n] = {
+                "is_on": bool(r.get("is_on", False)),
+                "name": r.get("name", f"Relay {n}"),
+            }
+        system_mode = live.get("system_mode") or ""
+        operation_mode = live.get("operation_mode") or ""
+    else:
+        device_id = device.get("device_id")
+        names = {}
+        if device_id:
+            for s in get_device_relay_settings(device_id) or []:
+                names[s.get("relay_number")] = s.get("relay_name")
+            for row in get_latest_relay_states(device_id):
+                n = row.get("relay_number")
+                relays[n] = {
+                    "is_on": bool(row.get("relay_state")),
+                    "name": names.get(n) or f"Relay {n}",
+                    "ts": row.get("reading_ts"),
+                }
+        ts_values = [r["ts"] for r in relays.values() if r.get("ts")]
+        if ts_values:
+            as_of = _format_last_seen(max(ts_values))
+        system_mode = mode_map.get(device.get("mode_enabled", 0), "")
+        operation_mode = op_map.get(device.get("mode_operation", 0), "")
+
+    on = sum(1 for r in relays.values() if r["is_on"])
+    total = len(relays)
+    return {
+        "relays": relays,
+        "total": total,
+        "on": on,
+        "off": total - on,
+        "system_mode": system_mode,
+        "operation_mode": operation_mode,
+        "as_of": as_of,
+    }
+
+
+def _hyphae_relay_state_panel(device: Dict, colors: dict):
+    """Show current relay states (ON/OFF) for all 6 relays — DB-first."""
+    state = {"live": None, "fetched": False}
+
+    @ui.refreshable
+    def body():
+        view = _hyphae_relay_state_view(device, state["live"])
+        relays = view["relays"]
+
+        _panel_source_row(
+            state,
+            lambda: fetch_hyphae_relay_state(device.get("hostname", "")),
+            body,
+            as_of=view["as_of"],
+        )
+
+        if not relays:
+            ui.label(
+                "No relay state recorded yet. Click “Refresh from device” to fetch live."
+            ).classes("text-muted")
+            return
+
+        with ui.row().classes("w-full gap-4 flex-wrap q-mb-md"):
+            _mini_stat("Total", str(view["total"]), colors["primary"])
+            _mini_stat("ON", str(view["on"]), STATUS_COLORS["online"])
+            _mini_stat("OFF", str(view["off"]), STATUS_COLORS["offline"])
+
+        if view["system_mode"]:
+            ui.label(f"System Mode: {view['system_mode']}").classes(
+                "text-caption text-muted"
+            )
+        if view["operation_mode"]:
+            ui.label(f"Operation Mode: {view['operation_mode']}").classes(
+                "text-caption text-muted"
+            )
+
+        with ui.row().classes("w-full gap-4 flex-wrap"):
+            for i in range(1, 7):
+                relay = relays.get(i)
+                is_on = relay["is_on"] if relay else False
+                relay_name = relay["name"] if relay else f"Relay {i}"
+
+                with ui.card().classes("p-4 min-w-36 flex-1 text-center"):
+                    color = (
+                        STATUS_COLORS["online"] if is_on else STATUS_COLORS["offline"]
+                    )
+                    ui.icon("toggle_on" if is_on else "toggle_off", size="lg").style(
+                        f"color: {color}"
+                    )
+                    ui.label(relay_name).classes("text-subtitle2 q-mt-xs")
+                    ui.badge(
+                        "ON" if is_on else "OFF",
+                        color="green" if is_on else "red",
+                    ).classes("q-mt-xs")
+
+    body()
+
+
+def _hyphae_schedule_panel(device: Dict, colors: dict):
+    """Show relay schedule settings (on/off times per group) — DB-first."""
+    device_id = device.get("device_id")
+    state = {"live": None, "fetched": False}
+
+    def _db_groups():
+        rows = get_device_schedule_settings(device_id) if device_id else None
+        if not rows:
+            return []
+        return [
+            {
+                "group_id": s.get("group_num", 0),
+                "group_name": f"Group {s.get('group_num', '?')}",
+                "on_time": s.get("on_time", "N/A"),
+                "off_time": s.get("off_time", "N/A"),
+            }
+            for s in rows
+        ]
+
+    @ui.refreshable
+    def body():
+        groups = state["live"].get("groups", []) if state["live"] else _db_groups()
+
+        _panel_source_row(
+            state,
+            lambda: fetch_hyphae_relay_schedule(device.get("hostname", "")),
+            body,
+        )
+
+        if not groups:
+            ui.label("No schedule configuration available.").classes("text-muted")
+            return
+
+        ui.label(f"{len(groups)} group schedule(s)").classes(
+            "text-caption text-muted q-mb-md"
+        )
+
+        with ui.row().classes("w-full gap-4 flex-wrap"):
+            for group in groups:
+                with ui.card().classes("p-4 min-w-48 flex-1"):
+                    ui.label(
+                        f"Group {group.get('group_id', '?')}: "
+                        f"{group.get('group_name', '')}"
+                    ).classes("text-subtitle2 text-weight-bold")
+                    _kv("On Time", str(group.get("on_time", "N/A")))
+                    _kv("Off Time", str(group.get("off_time", "N/A")))
+
+    body()
+
+
+def _hyphae_dynamic_panel(device: Dict, colors: dict):
+    """Show dynamic control settings (CO2/humidity/temp thresholds) — DB-first."""
+    device_id = device.get("device_id")
+    state = {"live": None, "fetched": False}
+
+    def _db_controls():
+        rows = get_device_dynamic_settings(device_id) if device_id else None
+        if not rows:
+            return []
+        return [
+            {
+                "relay_id": f"Group {d.get('group_num', '?')}",
+                "relay_name": d.get("parameter", "Unknown").title(),
+                "sensor_type": d.get("parameter", "Unknown").title(),
+                "low_threshold": str(d.get("low_threshold", 0)),
+                "high_threshold": str(d.get("high_threshold", 0)),
+                "is_activate_high": d.get("behavior", 0) == 1,
+                "behavior": "ACTIVATE HIGH"
+                if d.get("behavior", 0) == 1
+                else "ACTIVATE LOW",
+                "activate": True,
+            }
+            for d in rows
+        ]
+
+    @ui.refreshable
+    def body():
+        controls = (
+            state["live"].get("controls", []) if state["live"] else _db_controls()
+        )
+
+        _panel_source_row(
+            state,
+            lambda: fetch_hyphae_relay_dynamic(device.get("hostname", "")),
+            body,
+        )
+
+        if not controls:
+            ui.label("No dynamic control configuration available.").classes(
+                "text-muted"
+            )
+            return
+
+        # Summary
+        total = len(controls)
+        active = len([c for c in controls if c.get("activate")])
+        sensor_types = list({c.get("sensor_type", "Unknown") for c in controls})
+
+        with ui.row().classes("w-full gap-4 flex-wrap q-mb-md"):
+            _mini_stat("Controls", str(total), colors["primary"])
+            _mini_stat("Active", str(active), STATUS_COLORS["online"])
+            _mini_stat("Sensor Types", str(len(sensor_types)), colors["primary"])
+
+        if sensor_types:
+            ui.label(f"Types: {', '.join(sensor_types)}").classes(
+                "text-caption text-muted q-mb-md"
+            )
+
+        with ui.row().classes("w-full gap-4 flex-wrap"):
+            for control in controls:
+                is_active = control.get("activate", False)
+                with ui.card().classes("p-4 min-w-56 flex-1"):
+                    ui.label(
+                        f"{control.get('relay_id', '')}: "
+                        f"{control.get('relay_name', '')}"
+                    ).classes("text-subtitle2 text-weight-bold")
+                    _kv("Low Threshold", str(control.get("low_threshold", "N/A")))
+                    _kv("High Threshold", str(control.get("high_threshold", "N/A")))
+
+                    behavior_color = (
+                        "green" if control.get("is_activate_high") else "blue"
+                    )
+                    ui.badge(control.get("behavior", "N/A"), color=behavior_color)
+
+                    if control.get("behavior_description"):
+                        ui.label(control["behavior_description"]).classes(
+                            "text-caption text-muted q-mt-xs"
+                        ).style("font-style: italic")
+
+                    ui.badge(
+                        "Active" if is_active else "Inactive",
+                        color="green" if is_active else "grey",
+                    ).classes("q-mt-xs")
+
+    body()
 
 
 # ---------------------------------------------------------------------------

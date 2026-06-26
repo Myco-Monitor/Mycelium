@@ -139,6 +139,39 @@ def get_relay_state_history(
     return execute_query(query, (device_id, relay_number, limit))
 
 
+def get_latest_relay_states(device_id: int) -> List[Dict[str, Any]]:
+    """
+    Get the most recent stored state for each relay of a hyphae device.
+
+    The poller writes one row per relay each cycle (all sharing a reading_ts), so
+    "latest per relay" is the row with the newest reading_ts for each relay_number.
+    Lets the UI show current relay states from the database instead of polling the
+    device directly on every page view.
+
+    Args:
+        device_id (int): ID of the hyphae device
+
+    Returns:
+        List[Dict[str, Any]]: One latest reading per relay, ordered by relay_number.
+            Empty list if the device has no stored readings yet.
+    """
+    query = """
+    SELECT r.*
+    FROM readings_hyphae r
+    INNER JOIN (
+        SELECT relay_number, MAX(reading_ts) AS max_ts
+        FROM readings_hyphae
+        WHERE device_id = ?
+        GROUP BY relay_number
+    ) latest
+        ON r.relay_number = latest.relay_number
+        AND r.reading_ts = latest.max_ts
+    WHERE r.device_id = ?
+    ORDER BY r.relay_number
+    """
+    return execute_query(query, (device_id, device_id))
+
+
 def update_reading(
     device_id: int,
     reading_ts: str,
