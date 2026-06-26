@@ -331,11 +331,18 @@ def _format_last_seen(value) -> str:
 
 
 def _online_badge(is_online) -> None:
-    """Render an online/offline badge inline."""
+    """Render an online/offline badge inline.
+
+    Uses Quasar's fixed green/red palette rather than an inline color so the
+    status stays unambiguous whatever accent the user picks for the theme. (An
+    inline background-color loses to Quasar's `bg-primary !important` class, which
+    is why the badge previously took on the theme color.)
+    """
     online = bool(is_online)
-    color = STATUS_COLORS["online"] if online else STATUS_COLORS["offline"]
-    text = "Online" if online else "Offline"
-    ui.badge(text).style(f"background-color: {color}; color: white;")
+    ui.badge(
+        "Online" if online else "Offline",
+        color="green" if online else "red",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -408,57 +415,24 @@ def devices_page():
 
         stat_cards()
 
-        # --- Tabs ---
+        # --- Tabs (Spore / Hyphae). Each device row expands inline to reveal its
+        #     detail tabs, so there is no separate "Device Detail" tab. ---
         with ui.tabs().classes("w-full") as tabs:
             spore_tab = ui.tab("Spore Devices", icon="sensors")
             hyphae_tab = ui.tab("Hyphae Devices", icon="device_hub")
-            detail_tab = ui.tab("Device Detail", icon="info")
 
         with ui.tab_panels(tabs, value=spore_tab).classes("w-full"):
             # =============================================================
             # SPORE TAB
             # =============================================================
             with ui.tab_panel(spore_tab):
-                _build_spore_panel(
-                    colors, selected_device, tabs, detail_tab, stat_cards
-                )
+                _build_spore_panel(colors, selected_device, stat_cards)
 
             # =============================================================
             # HYPHAE TAB
             # =============================================================
             with ui.tab_panel(hyphae_tab):
-                _build_hyphae_panel(
-                    colors, selected_device, tabs, detail_tab, stat_cards
-                )
-
-            # =============================================================
-            # DEVICE DETAIL TAB
-            # =============================================================
-            with ui.tab_panel(detail_tab):
-                detail_container = ui.column().classes("w-full gap-4")
-
-                @ui.refreshable
-                def device_detail():
-                    detail_container.clear()
-                    with detail_container:
-                        if selected_device["type"] is None:
-                            ui.label(
-                                "Select a device from the Spore or Hyphae table to view details."
-                            ).classes("text-muted")
-                            return
-                        if selected_device["type"] == "spore":
-                            _render_spore_detail(
-                                selected_device["data"], colors, selected_device
-                            )
-                        else:
-                            _render_hyphae_detail(
-                                selected_device["data"], colors, selected_device
-                            )
-
-                device_detail()
-
-                # Store refreshable reference so table clicks can trigger it
-                selected_device["_refresh_detail"] = device_detail
+                _build_hyphae_panel(colors, selected_device, stat_cards)
 
         # Wire discovery button now that stat_cards is defined
         discover_btn.on(
@@ -471,9 +445,21 @@ def devices_page():
         # status lives in the is_online flag (single source of truth); the poller
         # keeps it current, this just surfaces it.
         def _auto_refresh_status():
-            for key in ("_spore_table", "_hyphae_table", "_stat_cards"):
-                ref = selected_device.get(key)
-                if ref is not None:
+            # Always keep the stat cards current. Only rebuild a device list when
+            # none of its rows are expanded, so a periodic refresh never collapses
+            # a detail panel the user is actively viewing.
+            sc = selected_device.get("_stat_cards")
+            if sc is not None:
+                try:
+                    sc.refresh()
+                except Exception:
+                    pass
+            for table_key, open_key in (
+                ("_spore_table", "_open_spore"),
+                ("_hyphae_table", "_open_hyphae"),
+            ):
+                ref = selected_device.get(table_key)
+                if ref is not None and not selected_device.get(open_key):
                     try:
                         ref.refresh()
                     except Exception:
@@ -515,15 +501,120 @@ def _safe_get_hyphae_devices() -> List[Dict]:
 
 
 # ---------------------------------------------------------------------------
+# Expandable device rows (replace the old table + separate Device Detail tab)
+# ---------------------------------------------------------------------------
+
+# CSS grid column templates shared by each list's header bar and its rows so the
+# columns line up. The leading expand chevron sits outside the grid.
+_SPORE_GRID = "grid-template-columns: 1.6fr 1.8fr 1.2fr 0.9fr 1.4fr;"
+_HYPHAE_GRID = "grid-template-columns: 1.5fr 1.6fr 1.1fr 1fr 0.9fr 1.3fr;"
+
+
+def _row_grid(template: str):
+    """A grid element holding one row of aligned device columns."""
+    return ui.element("div").style(
+        f"display: grid; {template} align-items: center; gap: 0.75rem; "
+        "flex: 1 1 0; min-width: 0;"
+    )
+
+
+def _device_list_header(labels: List[str], template: str):
+    """Column-label bar shown above an expandable device list."""
+    with ui.row().classes("w-full items-center gap-2 px-3 q-mt-sm no-wrap"):
+        ui.element("div").style("width: 1.5rem; flex: 0 0 auto;")  # chevron spacer
+        with _row_grid(template):
+            for lbl in labels:
+                ui.label(lbl).classes("text-caption text-weight-bold text-muted")
+
+
+def _expandable_device_row(device, template, header_cells, detail_render, open_rows):
+    """Render one device as a click-to-expand row.
+
+    The header shows the device's summary columns with a leading chevron (in
+    place of the old selection checkbox). Expanding lazily renders the full
+    detail — the same tabbed view that used to live in the Device Detail tab.
+    `open_rows` tracks which device_ids are expanded so the auto-refresh timer
+    can avoid rebuilding (and collapsing) a list the user is viewing.
+    """
+    device_id = device.get("device_id")
+    state = {"rendered": False}
+
+    with ui.card().classes("w-full p-0"):
+        header = ui.row().classes(
+            "w-full items-center gap-2 px-3 py-2 cursor-pointer no-wrap"
+        )
+        with header:
+            chevron = ui.icon("chevron_right", size="sm").classes("text-muted")
+            with _row_grid(template):
+                header_cells(device)
+        body = ui.column().classes("w-full px-3 pb-3 gap-3")
+        body.set_visibility(False)
+
+    def _toggle():
+        if device_id in open_rows:
+            open_rows.discard(device_id)
+            chevron.props("name=chevron_right")
+            body.set_visibility(False)
+            return
+        open_rows.add(device_id)
+        chevron.props("name=expand_more")
+        body.set_visibility(True)
+        if not state["rendered"]:
+            with body:
+                detail_render(device)
+            state["rendered"] = True
+
+    header.on("click", _toggle)
+
+
+def _spore_header_cells(device: Dict):
+    """Summary columns for a Spore row (order must match _SPORE_GRID)."""
+    ui.label(device.get("device_name") or "—").classes("text-weight-medium ellipsis")
+    ui.label(device.get("hostname") or "—").classes("text-caption ellipsis")
+    ui.label(device.get("room_name") or "Unassigned").classes("text-caption ellipsis")
+    _online_badge(device.get("is_online"))
+    ui.label(_format_last_seen(device.get("last_update"))).classes(
+        "text-caption ellipsis"
+    )
+
+
+def _hyphae_header_cells(device: Dict):
+    """Summary columns for a Hyphae row (order must match _HYPHAE_GRID)."""
+    mode_map = {0: "Offline", 1: "Testing", 2: "Running"}
+    ui.label(device.get("device_name") or "—").classes("text-weight-medium ellipsis")
+    ui.label(device.get("hostname") or "—").classes("text-caption ellipsis")
+    ui.label(device.get("room_name") or "Unassigned").classes("text-caption ellipsis")
+    mode_text = mode_map.get(device.get("mode_enabled", 0), "Unknown")
+    mode_color = (
+        "green"
+        if mode_text == "Running"
+        else "orange"
+        if mode_text == "Testing"
+        else "grey"
+    )
+    ui.badge(mode_text, color=mode_color)
+    _online_badge(device.get("is_online"))
+    ui.label(_format_last_seen(device.get("last_update"))).classes(
+        "text-caption ellipsis"
+    )
+
+
+# ---------------------------------------------------------------------------
 # SPORE panel
 # ---------------------------------------------------------------------------
 
 
-def _build_spore_panel(colors, selected_device, tabs, detail_tab, stat_cards):
-    """Build the Spore devices tab content."""
+def _build_spore_panel(colors, selected_device, stat_cards):
+    """Build the Spore devices tab content (expandable row per device)."""
+    open_rows: set = set()
+    selected_device["_open_spore"] = open_rows
 
     @ui.refreshable
     def spore_table():
+        # Rebuilt rows start collapsed, so reset the open-row set here. The
+        # auto-refresh timer relies on this to know nothing is expanded.
+        open_rows.clear()
+
         devices = _safe_get_spore_devices()
         if not devices:
             ui.label("No Spore devices found. Add a device to get started.").classes(
@@ -531,86 +622,17 @@ def _build_spore_panel(colors, selected_device, tabs, detail_tab, stat_cards):
             )
             return
 
-        columns = [
-            {
-                "name": "device_name",
-                "label": "Name",
-                "field": "device_name",
-                "align": "left",
-                "sortable": True,
-            },
-            {
-                "name": "hostname",
-                "label": "Hostname",
-                "field": "hostname",
-                "align": "left",
-            },
-            {
-                "name": "room_name",
-                "label": "Room",
-                "field": "room_name",
-                "align": "left",
-            },
-            {
-                "name": "is_online",
-                "label": "Status",
-                "field": "is_online",
-                "align": "center",
-            },
-            {
-                "name": "last_update",
-                "label": "Last Seen",
-                "field": "last_update",
-                "align": "left",
-            },
-        ]
-
-        rows = []
-        for d in devices:
-            rows.append(
-                {
-                    "device_id": d.get("device_id"),
-                    "device_name": d.get("device_name", ""),
-                    "hostname": d.get("hostname", ""),
-                    "room_name": d.get("room_name", ""),
-                    "is_online": "Online" if d.get("is_online") else "Offline",
-                    "last_update": _format_last_seen(d.get("last_update")),
-                    "_raw": d,
-                }
-            )
-
-        table = ui.table(
-            columns=columns,
-            rows=rows,
-            row_key="device_id",
-            selection="single",
-        ).classes("w-full")
-
-        # Status column styling
-        table.add_slot(
-            "body-cell-is_online",
-            r"""
-            <q-td :props="props">
-                <q-badge :color="props.row.is_online === 'Online' ? 'green' : 'red'">
-                    {{ props.row.is_online }}
-                </q-badge>
-            </q-td>
-        """,
+        _device_list_header(
+            ["Name", "Hostname", "Room", "Status", "Last Seen"], _SPORE_GRID
         )
-
-        def on_select(e):
-            rows_selected = table.selected
-            if rows_selected:
-                row = rows_selected[0]
-                device_id = row.get("device_id")
-                raw = next((d for d in devices if d.get("device_id") == device_id), row)
-                selected_device["type"] = "spore"
-                selected_device["data"] = raw
-                if "_refresh_detail" in selected_device:
-                    selected_device["_refresh_detail"].refresh()
-                tabs.set_value(detail_tab)
-
-        table.on("selection", on_select)
+        for d in devices:
+            _expandable_device_row(
+                d,
+                _SPORE_GRID,
+                _spore_header_cells,
+                lambda dev: _render_spore_detail(dev, colors, selected_device),
+                open_rows,
+            )
 
     # Buttons row
     with ui.row().classes("w-full items-center gap-2 q-mb-md"):
@@ -681,11 +703,16 @@ def _build_spore_panel(colors, selected_device, tabs, detail_tab, stat_cards):
 # ---------------------------------------------------------------------------
 
 
-def _build_hyphae_panel(colors, selected_device, tabs, detail_tab, stat_cards):
-    """Build the Hyphae devices tab content."""
+def _build_hyphae_panel(colors, selected_device, stat_cards):
+    """Build the Hyphae devices tab content (expandable row per device)."""
+    open_rows: set = set()
+    selected_device["_open_hyphae"] = open_rows
 
     @ui.refreshable
     def hyphae_table():
+        # Rebuilt rows start collapsed, so reset the open-row set here.
+        open_rows.clear()
+
         devices = _safe_get_hyphae_devices()
         if not devices:
             ui.label("No Hyphae devices found. Add a device to get started.").classes(
@@ -693,131 +720,17 @@ def _build_hyphae_panel(colors, selected_device, tabs, detail_tab, stat_cards):
             )
             return
 
-        mode_enabled_map = {0: "Offline", 1: "Testing", 2: "Running"}
-        mode_operation_map = {0: "Schedule", 1: "Dynamic"}
-
-        columns = [
-            {
-                "name": "device_name",
-                "label": "Name",
-                "field": "device_name",
-                "align": "left",
-                "sortable": True,
-            },
-            {
-                "name": "hostname",
-                "label": "Hostname",
-                "field": "hostname",
-                "align": "left",
-            },
-            {
-                "name": "room_name",
-                "label": "Room",
-                "field": "room_name",
-                "align": "left",
-            },
-            {
-                "name": "mac_address",
-                "label": "MAC",
-                "field": "mac_address",
-                "align": "left",
-            },
-            {
-                "name": "firmware_version",
-                "label": "Firmware",
-                "field": "firmware_version",
-                "align": "left",
-            },
-            {
-                "name": "mode_enabled",
-                "label": "Mode",
-                "field": "mode_enabled",
-                "align": "center",
-            },
-            {
-                "name": "mode_operation",
-                "label": "Operation",
-                "field": "mode_operation",
-                "align": "center",
-            },
-            {
-                "name": "is_online",
-                "label": "Status",
-                "field": "is_online",
-                "align": "center",
-            },
-            {
-                "name": "last_update",
-                "label": "Last Seen",
-                "field": "last_update",
-                "align": "left",
-            },
-        ]
-
-        rows = []
+        _device_list_header(
+            ["Name", "Hostname", "Room", "Mode", "Status", "Last Seen"], _HYPHAE_GRID
+        )
         for d in devices:
-            rows.append(
-                {
-                    "device_id": d.get("device_id"),
-                    "device_name": d.get("device_name", ""),
-                    "hostname": d.get("hostname", ""),
-                    "room_name": d.get("room_name", ""),
-                    "mac_address": d.get("mac_address", ""),
-                    "firmware_version": d.get("firmware_version", ""),
-                    "mode_enabled": mode_enabled_map.get(
-                        d.get("mode_enabled", 0), "Unknown"
-                    ),
-                    "mode_operation": mode_operation_map.get(
-                        d.get("mode_operation", 0), "Unknown"
-                    ),
-                    "is_online": "Online" if d.get("is_online") else "Offline",
-                    "last_update": _format_last_seen(d.get("last_update")),
-                    "_raw": d,
-                }
+            _expandable_device_row(
+                d,
+                _HYPHAE_GRID,
+                _hyphae_header_cells,
+                lambda dev: _render_hyphae_detail(dev, colors, selected_device),
+                open_rows,
             )
-
-        table = ui.table(
-            columns=columns,
-            rows=rows,
-            row_key="device_id",
-            selection="single",
-        ).classes("w-full")
-
-        table.add_slot(
-            "body-cell-is_online",
-            r"""
-            <q-td :props="props">
-                <q-badge :color="props.row.is_online === 'Online' ? 'green' : 'red'">
-                    {{ props.row.is_online }}
-                </q-badge>
-            </q-td>
-        """,
-        )
-
-        table.add_slot(
-            "body-cell-mode_enabled",
-            r"""
-            <q-td :props="props">
-                <q-badge :color="props.row.mode_enabled === 'Running' ? 'green' : props.row.mode_enabled === 'Testing' ? 'orange' : 'grey'">
-                    {{ props.row.mode_enabled }}
-                </q-badge>
-            </q-td>
-        """,
-        )
-
-        def on_select(e):
-            rows_selected = table.selected
-            if rows_selected:
-                row = rows_selected[0]
-                device_id = row.get("device_id")
-                raw = next((d for d in devices if d.get("device_id") == device_id), row)
-                selected_device["type"] = "hyphae"
-                selected_device["data"] = raw
-                if "_refresh_detail" in selected_device:
-                    selected_device["_refresh_detail"].refresh()
-                tabs.set_value(detail_tab)
-
-        table.on("selection", on_select)
 
     with ui.row().classes("w-full items-center gap-2 q-mb-md"):
         ui.button(
@@ -1994,16 +1907,10 @@ def _device_management_panel(
             ui.notify(f"Removed {device.get('device_name', 'device')}", type="positive")
             confirm_dialog.close()
 
-            # Clear the detail selection and refresh the list/stat cards.
+            # Refresh the device lists/stat cards so the removed row disappears.
+            # Rebuilding the list resets its open-row set, collapsing this panel.
             if selected_device is not None:
-                selected_device["type"] = None
-                selected_device["data"] = None
-                for key in (
-                    "_refresh_detail",
-                    "_spore_table",
-                    "_hyphae_table",
-                    "_stat_cards",
-                ):
+                for key in ("_spore_table", "_hyphae_table", "_stat_cards"):
                     ref = selected_device.get(key)
                     if ref is not None:
                         try:
