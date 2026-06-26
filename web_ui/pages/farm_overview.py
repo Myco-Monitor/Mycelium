@@ -122,7 +122,7 @@ def _stat_card(label, value, icon, colors):
 def _farm_card(farm: dict, colors: dict):
     """Single farm card with stats, edit/deactivate, and expandable room list."""
     fid = farm["farm_id"]
-    is_active = farm.get("is_active", 1)
+    is_active = farm.get("active", 1)
     stats = _safe_stats(fid)
 
     opacity = "" if is_active else "opacity: 0.55;"
@@ -208,7 +208,7 @@ def _room_section(farm_id: int, colors: dict):
 def _room_row(room: dict, colors: dict):
     """Single room row with device counts and actions."""
     rid = room["room_id"]
-    is_active = room.get("is_active", 1)
+    is_active = room.get("active", 1)
 
     # Count devices in this room
     spores = [d for d in get_all_device_spore() if d.get("room_id") == rid]

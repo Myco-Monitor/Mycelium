@@ -238,7 +238,7 @@ def get_farm_statistics(farm_id: int) -> Dict[str, Any]:
             AVG(rs.humidity) as avg_humidity,
             AVG(rs.co2) as avg_co2
         FROM readings_spore rs
-        JOIN device_spore ds ON rs.spore_id = ds.device_id
+        JOIN device_spore ds ON rs.device_id = ds.device_id
         JOIN grow_rooms gr ON ds.room_id = gr.room_id
         WHERE gr.farm_id = ?
         AND rs.reading_ts >= datetime('now', '-1 hour')
