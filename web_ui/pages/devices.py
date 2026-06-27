@@ -29,6 +29,7 @@ from storage.tables.device_spore import (
 )
 from storage.tables.device_hyphae import (
     get_all_device_hyphae,
+    update_device_hyphae,
     delete_device_hyphae,
 )
 from storage.tables.grow_rooms import get_all_grow_rooms
@@ -105,6 +106,33 @@ def _parse_hyphae_schedule_html(html_text: Optional[str]) -> Optional[Dict]:
             continue
         groups.append({"group": g, "on_min": on, "off_min": off})
     return {"groups": groups} if groups else None
+
+
+_ENABLED_MODE_TO_INT = {"off": 0, "testing": 1, "running": 2}
+_OPERATION_MODE_TO_INT = {"schedule": 0, "dynamic": 1}
+
+
+def _config_mode_value(html_text: str, label: str) -> Optional[str]:
+    """Return the value text shown next to a config-page label (e.g. 'Testing')."""
+    m = re.search(rf"{re.escape(label)}</span><span[^>]*>([^<]+)</span>", html_text)
+    return m.group(1).strip() if m else None
+
+
+def _parse_hyphae_config_modes(html_text: Optional[str]) -> Optional[Dict]:
+    """Parse the Enabled Mode + Operation Mode from the /hyphae-config page.
+
+    Returns ints matching the DB columns: enabled_mode 0=Off/1=Testing/2=Running,
+    operation_mode 0=Schedule/1=Dynamic. Either may be None if not found.
+    """
+    if not html_text:
+        return None
+    enabled = _config_mode_value(html_text, "Enabled Mode")
+    operation = _config_mode_value(html_text, "Operation Mode")
+    e = _ENABLED_MODE_TO_INT.get((enabled or "").lower())
+    o = _OPERATION_MODE_TO_INT.get((operation or "").lower())
+    if e is None and o is None:
+        return None
+    return {"enabled_mode": e, "operation_mode": o}
 
 
 def _parse_hyphae_dynamic_html(html_text: Optional[str]) -> Optional[Dict]:
@@ -199,6 +227,15 @@ def fetch_hyphae_config(ip: str) -> Optional[Dict]:
 def fetch_hyphae_relay_config(ip: str) -> Optional[Dict]:
     """Fetch relay configuration from Hyphae /api/relay/config."""
     return _get_json(ip, "/api/relay/config")
+
+
+def fetch_hyphae_config_modes(ip: str) -> Optional[Dict]:
+    """Fetch the device's Enabled/Operation mode by parsing the /hyphae-config page.
+
+    Neither mode is exposed as JSON, so we read the config page (which shows both
+    unconditionally) and map the labels back to the DB's integer codes.
+    """
+    return _parse_hyphae_config_modes(_get_text(ip, "/hyphae-config"))
 
 
 def fetch_hyphae_relay_state(ip: str) -> Optional[List]:
@@ -1531,7 +1568,13 @@ def _render_hyphae_detail(device: Dict, colors: dict, selected_device: Dict = No
             ui.notify("Device unreachable.", type="warning")
 
     ui.label(f"{device.get('device_name', 'Hyphae Device')}").classes("text-h5")
-    with ui.row().classes("w-full gap-2 items-center"):
+
+    # Status + mode badges. mode_enabled/mode_operation live on the DB row, which
+    # starts at its default until a refresh reads the device's real modes.
+    mode_state = {"live": None, "fetched": False}
+
+    @ui.refreshable
+    def mode_badges():
         _online_badge(device.get("is_online"))
         mode_text = mode_map.get(device.get("mode_enabled", 0), "Unknown")
         mode_color = (
@@ -1544,6 +1587,31 @@ def _render_hyphae_detail(device: Dict, colors: dict, selected_device: Dict = No
         ui.badge(mode_text, color=mode_color)
         op_text = op_map.get(device.get("mode_operation", 0), "Unknown")
         ui.badge(op_text, color="blue")
+
+    def _fetch_modes():
+        # Enabled/Operation mode aren't exposed as JSON, so read them from the
+        # /hyphae-config page, reflect them on the in-memory row, and persist so
+        # the badges stay correct on the next open (not just after a refresh).
+        data = fetch_hyphae_config_modes(device.get("hostname", ""))
+        if not data:
+            return None
+        updates = {}
+        if data.get("enabled_mode") is not None:
+            updates["mode_enabled"] = data["enabled_mode"]
+        if data.get("operation_mode") is not None:
+            updates["mode_operation"] = data["operation_mode"]
+        if updates:
+            device.update(updates)
+            try:
+                update_device_hyphae(device["device_id"], **updates)
+            except Exception:
+                pass
+        return data
+
+    register(mode_state, _fetch_modes, mode_badges)
+
+    with ui.row().classes("w-full gap-2 items-center"):
+        mode_badges()
         ui.space()
         ui.button(
             "Refresh from device", icon="cloud_download", on_click=_refresh_all
