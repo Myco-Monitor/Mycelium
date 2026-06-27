@@ -194,16 +194,39 @@ class EmailService:
         html_part = MIMEText(html_body, "html")
         msg.attach(html_part)
 
+        # Present our sending domain in the EHLO/HELO greeting. Google Workspace's
+        # SMTP relay identifies the sender by the HELO/EHLO domain (or a registered
+        # IP / SMTP AUTH); the default smtplib greeting is the local machine name,
+        # which the relay rejects with 5.7.1 "Invalid credentials for relay".
+        helo_domain = config["from_addr"].split("@")[-1].strip() or None
+
+        # Gmail/Workspace app passwords are displayed in 4-char groups; the spaces
+        # are presentation only and must be stripped before AUTH.
+        password = (config["password"] or "").replace(" ", "")
+
         # Send
         try:
             if config["use_tls"]:
-                server = smtplib.SMTP(config["server"], config["port"], timeout=10)
+                server = smtplib.SMTP(
+                    config["server"],
+                    config["port"],
+                    local_hostname=helo_domain,
+                    timeout=10,
+                )
+                server.ehlo(helo_domain)
                 server.starttls()
+                server.ehlo(helo_domain)  # re-greet after STARTTLS with our domain
             else:
-                server = smtplib.SMTP_SSL(config["server"], config["port"], timeout=10)
+                server = smtplib.SMTP_SSL(
+                    config["server"],
+                    config["port"],
+                    local_hostname=helo_domain,
+                    timeout=10,
+                )
+                server.ehlo(helo_domain)
 
-            if config["password"]:
-                server.login(config["from_addr"], config["password"])
+            if password:
+                server.login(config["from_addr"], password)
 
             server.sendmail(config["from_addr"], recipient, msg.as_string())
             server.quit()
