@@ -24,29 +24,70 @@ def _is_valid_email(addr: str) -> bool:
     return bool(_EMAIL_RE.match((addr or "").strip()))
 
 
-def _settings_email() -> str:
-    """The fallback alert recipient configured in Settings (smtp_to), or ''."""
+def _smtp_settings() -> tuple:
+    """Return (smtp_server, smtp_from, smtp_password, smtp_to) from user settings.
+
+    smtp_password is the SMTP/app password, decrypted by get_user_setting. Any
+    field absent comes back as an empty string.
+    """
     try:
         from storage.tables.user_settings import get_user_setting
 
         uid = app.storage.user.get("user_id")
-        settings = get_user_setting(uid) if uid else None
-        return (settings.get("smtp_to") or "").strip() if settings else ""
+        s = get_user_setting(uid) if uid else None
+        if not s:
+            return "", "", "", ""
+        return (
+            (s.get("smtp_server") or "").strip(),
+            (s.get("smtp_from") or "").strip(),
+            (s.get("smtp_password") or "").strip(),
+            (s.get("smtp_to") or "").strip(),
+        )
     except Exception:
-        return ""
+        return "", "", "", ""
 
 
 def _email_target_hint(notification_select) -> None:
-    """Caption (email method only) explaining that a blank target uses Settings."""
-    email = _settings_email()
-    text = (
-        f"Leave blank to send to your Settings email ({email})."
-        if email
-        else "Leave blank to send to the email configured in Settings."
-    )
-    ui.label(text).classes("text-caption text-muted").bind_visibility_from(
-        notification_select, "value", backward=lambda v: v == "email"
-    )
+    """Email-only hint/warning shown under the notification target field.
+
+    Warns (and says what's missing) when the Settings SMTP config can't actually
+    send mail; otherwise explains the blank-target -> Settings-email fallback.
+    """
+    server, sender, password, to_addr = _smtp_settings()
+    missing = []
+    if not server:
+        missing.append("SMTP server")
+    if not sender:
+        missing.append("sender address")
+    if not password:
+        missing.append("app password")
+
+    with (
+        ui.column()
+        .classes("w-full gap-1")
+        .bind_visibility_from(
+            notification_select, "value", backward=lambda v: v == "email"
+        )
+    ):
+        if missing:
+            ui.label(
+                "⚠ Email alerts won't send until SMTP is configured in "
+                f"Settings (missing: {', '.join(missing)})."
+            ).classes("text-caption text-negative")
+            ui.button(
+                "Open Settings",
+                icon="settings",
+                on_click=lambda: ui.navigate.to("/settings"),
+            ).props("flat dense size=sm color=primary")
+        elif to_addr:
+            ui.label(
+                f"Leave blank to send to your Settings email ({to_addr})."
+            ).classes("text-caption text-muted")
+        else:
+            ui.label(
+                "Enter an address here, or set a default email in Settings to "
+                "leave this blank."
+            ).classes("text-caption text-muted")
 
 
 # Alert type display mappings
