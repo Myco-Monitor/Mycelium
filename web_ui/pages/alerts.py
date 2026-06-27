@@ -24,6 +24,31 @@ def _is_valid_email(addr: str) -> bool:
     return bool(_EMAIL_RE.match((addr or "").strip()))
 
 
+def _settings_email() -> str:
+    """The fallback alert recipient configured in Settings (smtp_to), or ''."""
+    try:
+        from storage.tables.user_settings import get_user_setting
+
+        uid = app.storage.user.get("user_id")
+        settings = get_user_setting(uid) if uid else None
+        return (settings.get("smtp_to") or "").strip() if settings else ""
+    except Exception:
+        return ""
+
+
+def _email_target_hint(notification_select) -> None:
+    """Caption (email method only) explaining that a blank target uses Settings."""
+    email = _settings_email()
+    text = (
+        f"Leave blank to send to your Settings email ({email})."
+        if email
+        else "Leave blank to send to the email configured in Settings."
+    )
+    ui.label(text).classes("text-caption text-muted").bind_visibility_from(
+        notification_select, "value", backward=lambda v: v == "email"
+    )
+
+
 # Alert type display mappings
 ALERT_TYPE_LABELS = {
     "offline": "Device Offline",
@@ -588,8 +613,9 @@ def _open_add_rule_dialog(alert_service: AlertService, colors: dict):
             ):
                 notification_target = ui.input(
                     label="Notification Target",
-                    placeholder="Email address or webhook URL",
+                    placeholder="Email address (optional) or webhook URL",
                 ).classes("w-full")
+                _email_target_hint(notification_select)
 
         ui.separator()
 
@@ -758,8 +784,9 @@ def _open_edit_rule_dialog(rule: dict, alert_service: AlertService, colors: dict
                 notification_target = ui.input(
                     label="Notification Target",
                     value=rule.get("notification_target", ""),
-                    placeholder="Email address or webhook URL",
+                    placeholder="Email address (optional) or webhook URL",
                 ).classes("w-full")
+                _email_target_hint(notification_select)
 
         ui.separator()
 
