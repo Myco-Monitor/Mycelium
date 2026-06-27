@@ -20,6 +20,9 @@ class EmailService:
 
     def __init__(self):
         self.logger = logging.getLogger("api.EmailService")
+        # Reason for the most recent send failure (server response or a hint),
+        # so callers like the Settings "Send Test Email" button can surface it.
+        self.last_error: Optional[str] = None
 
     def _get_smtp_config(self, user_id: int = 1) -> Optional[Dict[str, Any]]:
         """
@@ -81,8 +84,11 @@ class EmailService:
         Returns:
             True if sent successfully, False otherwise.
         """
+        self.last_error = None
+
         config = self._get_smtp_config(user_id)
         if not config:
+            self.last_error = "SMTP is not configured in Settings."
             self.logger.debug("SMTP not configured, skipping email notification")
             return False
 
@@ -90,6 +96,7 @@ class EmailService:
         # otherwise fall back to the configured smtp_to address.
         recipient = (to_override or "").strip() or config["to_addr"]
         if not config["from_addr"] or not recipient:
+            self.last_error = "Missing sender (From) or recipient address in Settings."
             self.logger.debug("SMTP from address or recipient not configured")
             return False
 
@@ -235,6 +242,7 @@ class EmailService:
             return True
 
         except Exception as e:
+            self.last_error = str(e)
             self.logger.error(f"Failed to send email: {e}")
             return False
 

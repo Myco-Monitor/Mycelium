@@ -459,9 +459,13 @@ def settings_page():
                 if ok:
                     ui.notify("Test email sent successfully", type="positive")
                 else:
+                    detail = svc.last_error or "Check SMTP settings."
                     ui.notify(
-                        "Failed to send test email. Check SMTP settings.",
+                        f"Failed to send test email:\n{detail}",
                         type="negative",
+                        multi_line=True,
+                        close_button="Dismiss",
+                        timeout=0,
                     )
 
             ui.button("Send Test Email", icon="email", on_click=_test_email).props(
