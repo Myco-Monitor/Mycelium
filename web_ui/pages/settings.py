@@ -352,9 +352,28 @@ def settings_page():
                     'Check there after sending a test and mark as "Not Spam" to ensure future delivery.'
                 ).classes("text-caption text-warning")
 
+            with ui.expansion("Which settings do I use?", icon="help_outline").classes(
+                "w-full q-mb-sm"
+            ):
+                ui.markdown(
+                    "**Direct send (authenticated)** — works for any Gmail / Workspace "
+                    "account:\n"
+                    "- SMTP Server: `smtp.gmail.com` • Port: `587` • STARTTLS on\n"
+                    "- From Address: your full Gmail / Workspace address\n"
+                    "- Password: a Google **App Password** (not your login password)\n\n"
+                    "**Workspace SMTP relay** — send as your domain, often without a "
+                    "password:\n"
+                    "- SMTP Server: `smtp-relay.gmail.com` • Port: `587` • STARTTLS on\n"
+                    "- From Address: an address on your domain\n"
+                    "- Password: leave **blank** if your relay allows by IP/domain "
+                    "(register this server's public IP in Admin → Apps → Gmail → "
+                    "Routing → SMTP relay service); set an App Password if the relay "
+                    "requires SMTP AUTH."
+                ).classes("text-caption")
+
             smtp_server = ui.input(
                 label="SMTP Server",
-                placeholder="e.g., smtp.gmail.com",
+                placeholder="smtp.gmail.com or smtp-relay.gmail.com",
                 value=user_info.get("smtp_server") or "",
             ).classes("w-full")
 
@@ -377,8 +396,8 @@ def settings_page():
             ).classes("w-full")
 
             smtp_password = ui.input(
-                label="SMTP Password / App Password",
-                placeholder="Enter password",
+                label="App Password (blank for IP-allowlisted relay)",
+                placeholder="App Password, or blank for relay",
                 password=True,
                 password_toggle_button=True,
                 value=user_info.get("smtp_password") or "",

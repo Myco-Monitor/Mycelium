@@ -53,14 +53,14 @@ def _email_target_hint(notification_select) -> None:
     Warns (and says what's missing) when the Settings SMTP config can't actually
     send mail; otherwise explains the blank-target -> Settings-email fallback.
     """
-    server, sender, password, to_addr = _smtp_settings()
+    # Server + sender are always required; the password is optional (an
+    # IP/domain-allowlisted relay needs no SMTP AUTH), so don't flag it missing.
+    server, sender, _password, to_addr = _smtp_settings()
     missing = []
     if not server:
         missing.append("SMTP server")
     if not sender:
         missing.append("sender address")
-    if not password:
-        missing.append("app password")
 
     with (
         ui.column()
