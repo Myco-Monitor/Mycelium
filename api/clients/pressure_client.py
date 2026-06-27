@@ -5,7 +5,7 @@ This module provides a client for fetching BMP581 pressure data from Hyphae devi
 Pressure data is used for CO2 sensor calibration and environmental monitoring.
 
 Endpoints implemented:
-- GET /api/pressure - Get current pressure reading from BMP581 sensor
+- GET /api/weather/current - Get current pressure reading from BMP581 sensor
 - GET /api/pressure/history - Get pressure history
 """
 
@@ -100,11 +100,15 @@ class PressureClient(BaseApiClient):
             ApiError: If the request fails
         """
         try:
-            data = await self.get("/api/pressure")
+            # The Hyphae firmware serves live BMP581 pressure at /api/weather/current
+            # as {"pressure": <hPa>, "source": "local"}. It only publishes a value
+            # when the barometer has a valid reading, so presence implies healthy.
+            data = await self.get("/api/weather/current")
+            pressure = data.get("pressure")
             return PressureReading(
-                pressure_hpa=data.get("pressure_hpa", 0),
+                pressure_hpa=pressure if pressure is not None else 0,
                 source=data.get("source", "BMP581"),
-                healthy=data.get("healthy", False),
+                healthy=pressure is not None,
                 timestamp=data.get("timestamp", 0),
             )
         except ApiError as e:
@@ -125,9 +129,12 @@ class PressureClient(BaseApiClient):
             data = await self.get("/api/pressure/history")
             readings = []
             for r in data.get("readings", []):
+                # Firmware history items use the key "pressure" (older builds used
+                # "pressure_hpa"); accept either so we keep working across versions.
+                pressure = r.get("pressure", r.get("pressure_hpa", 0))
                 readings.append(
                     PressureReading(
-                        pressure_hpa=r.get("pressure_hpa", 0),
+                        pressure_hpa=pressure,
                         source="BMP581",
                         healthy=True,
                         timestamp=r.get("timestamp", 0),

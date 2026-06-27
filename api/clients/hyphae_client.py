@@ -124,18 +124,16 @@ class HyphaeClient(BaseApiClient):
         """
         Get current BMP581 pressure reading from the device.
 
+        Served by /api/weather/current as {"pressure": <hPa>, "source": "local"}.
+
         Returns:
-            Dict[str, Any]: Pressure data with keys:
-                - pressure_hpa (int): Pressure in hectopascals
-                - source (str): Sensor identifier (e.g., "BMP581")
-                - healthy (bool): Sensor health status
-                - timestamp (int): Unix timestamp of reading
+            Dict[str, Any]: Pressure data (e.g. {"pressure": 1008.2, "source": "local"})
 
         Raises:
             ApiError: If the request fails
         """
         try:
-            return await self.get("/api/pressure")
+            return await self.get("/api/weather/current")
         except ApiError as e:
             self.logger.error(f"Failed to get pressure: {e}")
             raise

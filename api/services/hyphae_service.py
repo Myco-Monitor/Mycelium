@@ -147,7 +147,13 @@ class HyphaeDataService:
 
     async def get_latest_reading(self, device_id: int) -> Optional[Dict[str, Any]]:
         """
-        Get the latest reading from a device.
+        Poll the device's current relay states and store them as a reading.
+
+        readings_hyphae records relay on/off state over time, so the poll fetches
+        /api/relay/state (which returns a `states` array of 6 booleans) and stamps
+        it with the current time. (It previously fetched /api/system/info, whose
+        uptime/rssi/signal_quality payload has no relay states — every poll then
+        failed validation and logged "Invalid reading".)
 
         Args:
             device_id (int): ID of the device
@@ -160,7 +166,13 @@ class HyphaeDataService:
             Optional[Dict[str, Any]]: The stored latest reading.
         """
         client = await self.get_client(device_id)
-        reading = await client.get_system_info()
+        state = await client.get_relay_state()
+
+        states = state.get("states", []) if isinstance(state, dict) else []
+        reading = {
+            "timestamp": datetime.now().isoformat(),
+            "relay_states": [1 if s else 0 for s in states],
+        }
 
         # Transform and store the reading
         stored_reading = await self.store_reading(device_id, reading)
