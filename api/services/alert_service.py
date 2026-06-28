@@ -95,8 +95,8 @@ class AlertService:
             # Check if device is offline or hasn't updated recently
             if not is_online or (last_update and last_update < cutoff_str):
                 # Check for duplicate
-                if not alert_history.check_duplicate_alert(
-                    rule["rule_id"], device["device_id"], minutes=60
+                if not alert_history.has_active_alert(
+                    rule["rule_id"], device["device_id"]
                 ):
                     # Create alert
                     message = f"{device['device_name']} offline for {duration_minutes}+ minutes"
@@ -145,8 +145,8 @@ class AlertService:
             triggered = (reading > threshold) if is_high else (reading < threshold)
 
             if triggered:
-                if not alert_history.check_duplicate_alert(
-                    rule["rule_id"], device["device_id"], minutes=30
+                if not alert_history.has_active_alert(
+                    rule["rule_id"], device["device_id"]
                 ):
                     direction = "above" if is_high else "below"
                     message = f"{metric.upper()} {direction} threshold on {device['device_name']}: {reading:.1f} (limit: {threshold})"
@@ -197,8 +197,8 @@ class AlertService:
 
             # Consider degraded if average response time > 2000ms
             if avg_response and avg_response > 2000:
-                if not alert_history.check_duplicate_alert(
-                    rule["rule_id"], device["device_id"], minutes=60
+                if not alert_history.has_active_alert(
+                    rule["rule_id"], device["device_id"]
                 ):
                     message = f"{device['device_name']} performance degraded (avg response: {avg_response:.0f}ms)"
 

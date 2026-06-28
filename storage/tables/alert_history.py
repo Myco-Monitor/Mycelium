@@ -269,22 +269,29 @@ def acknowledge_alert(alert_id: int, user_id: int, notes: Optional[str] = None) 
     return updated
 
 
-def check_duplicate_alert(
-    rule_id: int, device_id: Optional[int], minutes: int = 60
-) -> bool:
+def has_active_alert(rule_id: int, device_id: Optional[int]) -> bool:
     """
-    Check if a similar alert was triggered recently.
+    Return True if an unresolved alert already exists for this rule + device.
+
+    This collapses repeated triggers of the same condition into a single active
+    alert: while one is open (unresolved), no new alert is created; once it is
+    resolved (e.g. the reading drops back below the threshold, or the user
+    resolves it), the next trigger opens exactly one new alert.
+
+    Deliberately uses no time window. The previous time-based dedup compared a
+    local-time ISO cutoff (``datetime.now().isoformat()``, e.g.
+    ``2026-06-28T19:04:30``) against the DB's UTC ``CURRENT_TIMESTAMP``
+    ``triggered_at`` (e.g. ``2026-06-28 23:33:56`` -- space separator, UTC), so
+    the string comparison always failed and a fresh alert was created on every
+    poll.
 
     Args:
         rule_id: Rule ID
-        device_id: Device ID (can be None)
-        minutes: Time window to check
+        device_id: Device ID (can be None for rule-wide alerts)
 
     Returns:
-        True if duplicate exists
+        True if an active (unresolved) alert exists
     """
-    cutoff = (datetime.now() - timedelta(minutes=minutes)).isoformat()
-
     conn = get_connection()
     cursor = conn.cursor()
 
@@ -292,23 +299,17 @@ def check_duplicate_alert(
         cursor.execute(
             """
             SELECT COUNT(*) FROM alert_history
-            WHERE rule_id = ?
-            AND device_id = ?
-            AND triggered_at >= ?
-            AND resolved_at IS NULL
-        """,
-            (rule_id, device_id, cutoff),
+            WHERE rule_id = ? AND device_id = ? AND resolved_at IS NULL
+            """,
+            (rule_id, device_id),
         )
     else:
         cursor.execute(
             """
             SELECT COUNT(*) FROM alert_history
-            WHERE rule_id = ?
-            AND device_id IS NULL
-            AND triggered_at >= ?
-            AND resolved_at IS NULL
-        """,
-            (rule_id, cutoff),
+            WHERE rule_id = ? AND device_id IS NULL AND resolved_at IS NULL
+            """,
+            (rule_id,),
         )
 
     count = cursor.fetchone()[0]
