@@ -122,7 +122,7 @@ def get_unacknowledged_alerts() -> List[Dict[str, Any]]:
         SELECT ah.*, ar.rule_name, ar.rule_type
         FROM alert_history ah
         JOIN alert_rules ar ON ah.rule_id = ar.rule_id
-        WHERE ah.acknowledged = 0
+        WHERE ah.acknowledged = 0 AND ah.resolved_at IS NULL
         ORDER BY ah.triggered_at DESC
     """)
 
@@ -360,11 +360,16 @@ def get_alert_counts() -> Dict[str, int]:
     conn = get_connection()
     cursor = conn.cursor()
 
+    # "unacknowledged" counts only alerts that still need attention, i.e. active
+    # (unresolved) AND not acknowledged. A resolved alert never needs acking, so
+    # counting acknowledged=0 regardless of resolution inflated this with stale
+    # resolved alerts that never showed in the active list.
     cursor.execute("""
         SELECT
             COUNT(*) as total,
             SUM(CASE WHEN resolved_at IS NULL THEN 1 ELSE 0 END) as active,
-            SUM(CASE WHEN acknowledged = 0 THEN 1 ELSE 0 END) as unacknowledged
+            SUM(CASE WHEN acknowledged = 0 AND resolved_at IS NULL THEN 1 ELSE 0 END)
+                as unacknowledged
         FROM alert_history
         WHERE triggered_at >= datetime('now', '-24 hours')
     """)
