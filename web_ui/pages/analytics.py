@@ -19,6 +19,37 @@ from web_ui.theme import get_colors
 logger = logging.getLogger("web_ui.analytics")
 
 
+# -- Temperature unit preference ---------------------------------------------
+
+
+def _temp_pref() -> str:
+    """Current user's temperature unit preference ('C' or 'F'). Defaults to 'C'."""
+    try:
+        from storage.tables.user_settings import get_user_setting
+
+        uid = app.storage.user.get("user_id")
+        info = get_user_setting(uid) if uid else None
+        return (info.get("temp_pref") or "C") if info else "C"
+    except Exception:
+        return "C"
+
+
+def _temp_unit(pref: str) -> str:
+    """Display unit string for a preference."""
+    return "°F" if pref == "F" else "°C"
+
+
+def _to_pref_temp(celsius, pref: str):
+    """Convert a stored Celsius value to the preferred unit (float), or None."""
+    if celsius is None:
+        return None
+    try:
+        c = float(celsius)
+    except (TypeError, ValueError):
+        return None
+    return c * 9 / 5 + 32 if pref == "F" else c
+
+
 # -- Notebook state ----------------------------------------------------------
 
 
@@ -62,14 +93,15 @@ def execute_code_cell(code: str) -> str:
 # -- Chart builders -----------------------------------------------------------
 
 
-def _build_env_trends_chart(readings, colors):
+def _build_env_trends_chart(readings, colors, temp_pref="C"):
     """Build a plotly time-series chart for environmental trends."""
     if not readings:
         return _empty_figure("No environmental data for selected period")
 
+    temp_unit = _temp_unit(temp_pref)
     timestamps = [r.get("timestamp", "") for r in readings]
     co2 = [r.get("co2") for r in readings]
-    temp = [r.get("temperature") for r in readings]
+    temp = [_to_pref_temp(r.get("temperature"), temp_pref) for r in readings]
     humidity = [r.get("humidity") for r in readings]
 
     fig = go.Figure()
@@ -82,7 +114,7 @@ def _build_env_trends_chart(readings, colors):
         go.Scatter(
             x=timestamps,
             y=temp,
-            name="Temp (C)",
+            name=f"Temp ({temp_unit})",
             yaxis="y2",
             line=dict(color="#42a5f5"),
         )
@@ -105,7 +137,9 @@ def _build_env_trends_chart(readings, colors):
         legend=dict(orientation="h", y=1.12),
         xaxis=dict(title="Time"),
         yaxis=dict(title="CO2 (ppm)", side="left"),
-        yaxis2=dict(title="Temp (C)", side="right", overlaying="y", showgrid=False),
+        yaxis2=dict(
+            title=f"Temp ({temp_unit})", side="right", overlaying="y", showgrid=False
+        ),
         yaxis3=dict(
             title="Humidity (%)",
             side="right",
@@ -149,13 +183,19 @@ def _build_harvest_chart(harvests, colors):
     return fig
 
 
-def _build_hourly_chart(hourly_data, field, title, color):
-    """Build a plotly chart for hourly pattern data."""
+def _build_hourly_chart(hourly_data, field, title, color, value_transform=None):
+    """Build a plotly chart for hourly pattern data.
+
+    value_transform, if given, maps each raw value (e.g. Celsius -> the user's
+    preferred temperature unit) before plotting.
+    """
     if not hourly_data:
         return _empty_figure(f"No hourly {title.lower()} data")
 
     hours = [h.get("hour", 0) for h in hourly_data]
     values = [h.get(field, 0) or 0 for h in hourly_data]
+    if value_transform:
+        values = [value_transform(v) for v in values]
     hour_labels = [f"{h:02d}:00" for h in hours]
 
     fig = go.Figure()
@@ -452,10 +492,14 @@ def _stat_card(label, value, icon, colors):
 
 def _build_env_trends(stats, readings, colors):
     """Environmental Trends sub-tab content."""
+    pref = _temp_pref()
+    unit = _temp_unit(pref)
     with ui.row().classes("w-full gap-3 flex-wrap q-mb-md"):
         if stats:
+            avg_temp = _to_pref_temp(stats.temp_mean, pref)
+            temp_text = f"{avg_temp:.1f} {unit}" if avg_temp is not None else "--"
             _stat_card("Avg CO2", f"{stats.co2_mean:.0f} ppm", "co2", colors)
-            _stat_card("Avg Temp", f"{stats.temp_mean:.1f} C", "thermostat", colors)
+            _stat_card("Avg Temp", temp_text, "thermostat", colors)
             _stat_card(
                 "Avg Humidity", f"{stats.humidity_mean:.1f}%", "water_drop", colors
             )
@@ -470,7 +514,7 @@ def _build_env_trends(stats, readings, colors):
         ui.label("Environmental Trends").classes(
             "text-subtitle1 text-weight-bold q-mb-sm"
         )
-        fig = _build_env_trends_chart(readings, colors)
+        fig = _build_env_trends_chart(readings, colors, pref)
         ui.plotly(fig).classes("w-full").style("height: 400px")
 
 
@@ -508,7 +552,14 @@ def _build_daily_patterns(hourly, colors):
             ui.label("Temperature Hourly Pattern").classes(
                 "text-subtitle1 text-weight-bold q-mb-sm"
             )
-            fig = _build_hourly_chart(hourly, "avg_temp", "Temp (C)", "#42a5f5")
+            pref = _temp_pref()
+            fig = _build_hourly_chart(
+                hourly,
+                "avg_temp",
+                f"Temp ({_temp_unit(pref)})",
+                "#42a5f5",
+                value_transform=(lambda c: _to_pref_temp(c, pref)),
+            )
             ui.plotly(fig).classes("w-full").style("height: 300px")
 
         with ui.card().classes("flex-1 min-w-72 p-3"):
