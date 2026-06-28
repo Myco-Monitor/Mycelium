@@ -37,9 +37,25 @@ class EmailService:
         - smtp_use_tls: Whether to use STARTTLS (default True)
         """
         try:
-            from storage.tables.user_settings import get_user_setting
+            from storage.tables.user_settings import (
+                get_user_setting,
+                get_all_user_settings,
+            )
 
             settings = get_user_setting(user_id)
+            # Alerts fire from the background poller with no logged-in user, so a
+            # fixed user_id (default 1) can miss SMTP saved under another account.
+            # Fall back to whichever user_settings row actually has a server set.
+            if not settings or not (settings.get("smtp_server") or "").strip():
+                settings = next(
+                    (
+                        s
+                        for s in get_all_user_settings()
+                        if (s.get("smtp_server") or "").strip()
+                    ),
+                    settings,
+                )
+
             if not settings:
                 return None
 
