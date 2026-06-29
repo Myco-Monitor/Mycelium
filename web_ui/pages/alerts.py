@@ -207,8 +207,13 @@ def alerts_page():
                 alert_rules_list(alert_service, colors)
 
 
+@ui.refreshable
 def _render_summary_cards(alert_service: AlertService, colors: dict):
-    """Render the four summary statistic cards."""
+    """Render the four summary statistic cards.
+
+    Refreshable so acknowledging/resolving alerts updates the counts (the
+    Active / Unacknowledged cards) without a page reload.
+    """
     try:
         counts = alert_service.get_alert_counts()
     except Exception:
@@ -371,6 +376,7 @@ def _acknowledge_alert(
         alert_service.acknowledge_alert(alert_id, user_id=user.get("user_id", 1))
         ui.notify("Alert acknowledged", type="positive")
         refresh_fn()
+        _render_summary_cards.refresh()
     except Exception as e:
         ui.notify(f"Failed to acknowledge alert: {e}", type="negative")
 
@@ -381,6 +387,7 @@ def _resolve_alert(alert_id: int, alert_service: AlertService, refresh_fn):
         alert_service.resolve_alert(alert_id)
         ui.notify("Alert resolved", type="positive")
         refresh_fn()
+        _render_summary_cards.refresh()
     except Exception as e:
         ui.notify(f"Failed to resolve alert: {e}", type="negative")
 
@@ -413,6 +420,7 @@ def active_alerts_list(alert_service: AlertService, user: dict, colors: dict):
                     pass
             ui.notify(f"Acknowledged {len(unack)} alert(s)", type="positive")
             active_alerts_list.refresh()
+            _render_summary_cards.refresh()
 
         ui.button(
             f"Acknowledge All ({len(unack)})", icon="done_all", on_click=_ack_all
