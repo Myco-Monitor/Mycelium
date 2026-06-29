@@ -5,7 +5,7 @@ Provides alert management with active alerts, alert history, and rule configurat
 """
 
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from nicegui import ui, app
@@ -122,11 +122,14 @@ def format_time_ago(timestamp_str: Optional[str]) -> str:
         return "Unknown"
     try:
         ts = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
-        now = datetime.now()
-        if ts.tzinfo:
-            now = now.replace(tzinfo=ts.tzinfo)
-        diff = now - ts
-        seconds = diff.total_seconds()
+        # alert_history timestamps come from the DB's CURRENT_TIMESTAMP, which is
+        # UTC but naive. Treat a naive value as UTC and compare against UTC now,
+        # otherwise (in a behind-UTC timezone) the diff goes negative and every
+        # recent alert reads "just now".
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        now = datetime.now(timezone.utc)
+        seconds = max((now - ts).total_seconds(), 0)
         if seconds < 60:
             return "just now"
         elif seconds < 3600:
