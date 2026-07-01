@@ -256,16 +256,16 @@ def create_requirements_file():
         "nicegui>=2.0.0",
         "fastapi>=0.110.0",
         "plotly>=5.17.0",
-        # Data Processing
-        "pandas>=2.0.0,<2.3.0",
-        "numpy>=1.24.0,<2.0.0",
+        # Data Processing (floors set for Python 3.13 wheels)
+        "pandas>=2.2.3",
+        "numpy>=2.1.0",
         "openpyxl>=3.1.0",
         # Security
-        "cryptography>=41.0.0",
+        "cryptography>=43.0.0",
         # Device Communication
         "requests>=2.31.0",
-        "aiohttp>=3.9.0",
-        "zeroconf>=0.131.0",
+        "aiohttp>=3.11.0",
+        "zeroconf>=0.134.0",
     ]
 
     req_file = project_root / "requirements.txt"

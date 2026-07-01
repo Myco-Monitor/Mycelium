@@ -1,4 +1,8 @@
 # Mycelium Project Dependencies
+# Version floors are set so pip resolves builds that ship Python 3.13 wheels
+# (Raspberry Pi OS Trixie / the Pi-Image hub ships Python 3.13). Pure-Python
+# packages below already run on 3.13; the floors here matter for the ones with
+# compiled extensions (numpy, pandas, aiohttp, cryptography, zeroconf).
 
 # Core Web Framework (NiceGUI bundles FastAPI + Uvicorn)
 nicegui>=2.0.0
@@ -6,19 +10,19 @@ fastapi>=0.110.0
 plotly>=5.17.0
 
 # Security
-cryptography>=41.0.0
+cryptography>=43.0.0  # first release with cp313 wheels
 
 # Database
 # sqlite3 is built into Python
 
 # Data Processing
-pandas>=2.0.0,<2.3.0
-numpy>=1.24.0,<2.0.0  # transitive dep of pandas; pinned <2.0 for compatibility
+pandas>=2.2.3   # first release with Python 3.13 wheels (works with numpy 2.x)
+numpy>=2.1.0    # first release with Python 3.13 wheels
 openpyxl>=3.1.0  # Excel export (api/services/export_service.py)
 
 # HTTP Requests & Async
 requests>=2.31.0
-aiohttp>=3.9.0
+aiohttp>=3.11.0  # solid cp313 wheels
 
 # Device Discovery
-zeroconf>=0.131.0
+zeroconf>=0.134.0  # first releases with cp313 wheels
