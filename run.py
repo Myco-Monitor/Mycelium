@@ -105,11 +105,25 @@ def check_prerequisites():
     else:
         print(f"  Running in {env_info['type']} environment: {env_info['name']}")
 
-    # Check database
+    # Ensure the database exists. Like the storage secret and TLS cert (both
+    # created on first run in start_nicegui), the DB is per-install state we
+    # bootstrap on first start rather than requiring a separate setup.py step.
     db_path = project_root / "data" / "mycelium.db"
     if not db_path.exists():
-        print("  Database not found! Run: python setup.py")
-        return False
+        print("  Database not found; initializing a new one...")
+        # data/ also holds machine secrets (.pin_key, .storage_secret), so keep
+        # it owner-only, matching setup.py.
+        db_path.parent.mkdir(exist_ok=True)
+        try:
+            os.chmod(db_path.parent, 0o700)
+        except OSError:
+            pass
+        from storage.initialize_database import initialize_database as init_db
+
+        if not init_db(str(db_path)):
+            print("  Database initialization failed!")
+            return False
+        print(f"  Database initialized at {db_path}")
 
     # Check required modules
     required = ["nicegui", "plotly", "pandas"]
