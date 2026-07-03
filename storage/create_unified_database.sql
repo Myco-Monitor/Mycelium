@@ -182,6 +182,27 @@ CREATE INDEX IF NOT EXISTS idx_ota_device ON ota_history(device_id, device_type)
 CREATE INDEX IF NOT EXISTS idx_ota_status ON ota_history(status);
 CREATE INDEX IF NOT EXISTS idx_ota_started ON ota_history(started_at);
 
+-- Hub (app) self-update event log. Records each in-field update of the Mycelium
+-- app itself (distinct from device firmware OTA above): who ran it, from/to
+-- version, and the outcome (incl. auto-rollback). Supports the version-control
+-- audit trail behind Settings -> Hub Updates.
+CREATE TABLE IF NOT EXISTS hub_update_history (
+    update_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    from_version TEXT,
+    from_ref TEXT,
+    to_version TEXT,
+    to_ref TEXT,
+    to_sha TEXT,
+    status TEXT NOT NULL CHECK(status IN ('pending', 'success', 'failed', 'rolled_back')),
+    error_message TEXT,
+    initiated_by INTEGER,
+    started_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    completed_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_hub_update_started ON hub_update_history(started_at);
+CREATE INDEX IF NOT EXISTS idx_hub_update_status ON hub_update_history(status);
+
 -- Calibration event log
 CREATE TABLE IF NOT EXISTS calibration_history (
     cal_id INTEGER PRIMARY KEY AUTOINCREMENT,

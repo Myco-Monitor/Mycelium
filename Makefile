@@ -1,7 +1,7 @@
 # Mycelium Project Makefile
 # Simple commands for common development tasks
 
-.PHONY: help setup setup-conda setup-venv setup-existing setup-dev reset run dev clean clean-env
+.PHONY: help setup setup-conda setup-venv setup-existing setup-dev reset run dev clean clean-env release
 
 # Default target
 help:
@@ -25,6 +25,9 @@ help:
 	@echo "Maintenance:"
 	@echo "  make clean          - Clean up temporary files"
 	@echo "  make clean-env      - Remove mycelium environment"
+	@echo ""
+	@echo "Release:"
+	@echo "  make release        - Tag a release from version.py (does not push)"
 	@echo ""
 
 # Interactive setup (prompts for environment choice)
@@ -89,3 +92,8 @@ clean-env:
 		fi; \
 	fi
 	@echo "✅ Environment cleanup complete!"
+
+# Tag a release from version.py (does not push — see scripts/release.sh)
+release:
+	@echo "🏷️  Tagging release from version.py..."
+	./scripts/release.sh

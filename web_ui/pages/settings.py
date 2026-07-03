@@ -12,6 +12,18 @@ from web_ui.layout import page_layout, back_to_dashboard
 from web_ui.theme import get_colors
 from web_ui.format import fmt_datetime
 from web_ui.auth import is_admin
+from web_ui.updates import is_managed_appliance
+from api.services.hub_update_service import (
+    get_current_version,
+    check_for_update,
+    apply_update,
+)
+from storage.tables.hub_update_history import (
+    record_update_start,
+    record_update_result,
+    list_updates,
+    reconcile_interrupted,
+)
 from storage.tables.user_settings import (
     get_user_setting,
     update_user_setting,
@@ -154,6 +166,190 @@ def user_admin_section(current_uid: int):
         ui.button("Add User", icon="person_add", on_click=_add_user).props(
             "color=primary"
         ).classes("q-mt-sm")
+
+
+def _hub_update_section(uid):
+    """Settings card: show the current version, check for the newest release, and
+    (admin only) apply it with device-PIN confirmation. Rendered only on a managed
+    appliance — the caller gates on is_managed_appliance()."""
+    import hmac
+
+    state = {"info": None}
+
+    # Any 'pending' row still here is from an interrupted run (a real update
+    # restarts the service and drops this session); tidy them before rendering.
+    reconcile_interrupted()
+
+    with ui.card().classes("w-full"):
+        ui.label("Hub Updates").classes("text-h5 q-mb-md")
+        ui.label(f"Current version: {get_current_version()}").classes("text-body1")
+
+        @ui.refreshable
+        def status_line():
+            info = state["info"]
+            if not info:
+                ui.label(
+                    "Press “Check for updates” to see if a newer release is available."
+                ).classes("text-muted text-caption")
+            elif info.get("error"):
+                ui.label(f"Could not check for updates: {info['error']}").classes(
+                    "text-negative text-caption"
+                )
+            elif info.get("update_available"):
+                ui.label(f"Update available: {info['latest_version']}").classes(
+                    "text-positive"
+                )
+            else:
+                ui.label("This hub is on the latest version.").classes(
+                    "text-muted text-caption"
+                )
+
+        status_line()
+
+        @ui.refreshable
+        def history():
+            rows = list_updates(limit=5)
+            if not rows:
+                return
+            ui.separator().classes("q-my-sm")
+            ui.label("Recent updates").classes("text-subtitle2")
+            colors_by_status = {
+                "success": "positive",
+                "failed": "negative",
+                "rolled_back": "warning",
+                "pending": "grey",
+            }
+            with ui.column().classes("w-full gap-1"):
+                for r in rows:
+                    badge_color = colors_by_status.get(r.get("status"), "grey")
+                    when = fmt_datetime(r.get("started_at"), fallback="")
+                    target = r.get("to_ref") or r.get("to_version") or "?"
+                    with ui.row().classes("items-center gap-2"):
+                        ui.badge(r.get("status", ""), color=badge_color)
+                        ui.label(f"{target} · {when}").classes("text-caption")
+                        if r.get("error_message"):
+                            ui.label(r["error_message"]).classes(
+                                "text-caption text-muted"
+                            )
+
+        history()
+
+        if not is_admin():
+            ui.label("Only an admin can apply updates.").classes(
+                "text-caption text-muted q-mt-sm"
+            )
+            return
+
+        async def _run_update(ref):
+            # apply_update returns before the deferred restart fires, so we can
+            # both record the result and render the "restarting" banner before the
+            # websocket drops.
+            info = state["info"] or {}
+            update_id = record_update_start(
+                get_current_version(), info.get("current_ref"), ref, initiated_by=uid
+            )
+            progress = ui.notification(
+                f"Updating to {ref}… do not power off the hub.",
+                spinner=True,
+                timeout=None,
+            )
+            try:
+                result = await run.io_bound(apply_update, ref)
+            finally:
+                progress.dismiss()
+
+            outcome = result.get("result")
+            if outcome == "success":
+                record_update_result(update_id, "success", to_version=result.get("to"))
+                ui.notify(f"Update to {ref} applied. The hub is restarting.", type="positive")
+                ui.notification(
+                    "Finishing update — the hub is restarting. This page will "
+                    "reconnect automatically in about 30 seconds.",
+                    spinner=True,
+                    timeout=None,
+                )
+                ui.timer(30.0, lambda: ui.navigate.reload(), once=True)
+            elif outcome == "rolled_back":
+                record_update_result(
+                    update_id, "rolled_back", error_message=result.get("reason")
+                )
+                ui.notify(
+                    f"Update failed and was rolled back (now on "
+                    f"{result.get('to', 'the previous version')}). "
+                    f"{result.get('reason', '')}",
+                    type="warning",
+                    multi_line=True,
+                    close_button="Dismiss",
+                    timeout=0,
+                )
+            else:
+                record_update_result(
+                    update_id, "failed", error_message=result.get("error")
+                )
+                ui.notify(
+                    f"Update failed: {result.get('error', 'unknown error')}",
+                    type="negative",
+                    multi_line=True,
+                    close_button="Dismiss",
+                    timeout=0,
+                )
+            history.refresh()
+
+        async def _confirm_and_update(ref):
+            with ui.dialog() as dlg, ui.card():
+                ui.label(f"Confirm update to {ref}").classes("text-h6")
+                ui.label(
+                    "Enter your device PIN to apply. The hub will restart."
+                ).classes("text-caption text-muted")
+                pin_in = (
+                    ui.input("Device PIN")
+                    .props("type=password")
+                    .classes("w-full")
+                )
+                with ui.row().classes("justify-end w-full q-gutter-sm"):
+                    ui.button("Cancel", on_click=lambda: dlg.submit(None)).props("flat")
+                    ui.button(
+                        "Confirm", on_click=lambda: dlg.submit(pin_in.value)
+                    ).props("color=primary")
+            entered = await dlg
+            if entered is None:
+                return
+            stored = (get_user_setting(uid) or {}).get("reset_pin") or ""
+            if not stored:
+                ui.notify(
+                    "Set a device PIN first (Device Verification PIN section above).",
+                    type="negative",
+                )
+                return
+            if not hmac.compare_digest(str(entered).strip(), str(stored)):
+                ui.notify("Incorrect PIN", type="negative")
+                return
+            await _run_update(ref)
+
+        async def _check():
+            progress = ui.notification("Checking for updates…", spinner=True, timeout=None)
+            try:
+                info = await run.io_bound(check_for_update)
+            finally:
+                progress.dismiss()
+            state["info"] = info
+            status_line.refresh()
+            update_btn.set_enabled(bool(info and info.get("update_available")))
+
+        async def _update():
+            info = state["info"] or {}
+            ref = info.get("latest_ref")
+            if not info.get("update_available") or not ref:
+                ui.notify("No update available. Check for updates first.", type="warning")
+                return
+            await _confirm_and_update(ref)
+
+        with ui.row().classes("q-mt-md q-gutter-sm"):
+            ui.button("Check for updates", icon="refresh", on_click=_check).props("outline")
+            update_btn = ui.button(
+                "Update now", icon="system_update", on_click=_update
+            ).props("color=primary")
+            update_btn.set_enabled(False)
 
 
 @ui.page("/settings")
@@ -471,6 +667,10 @@ def settings_page():
             ui.button("Send Test Email", icon="email", on_click=_test_email).props(
                 "outline"
             ).classes("q-mt-xs")
+
+        # ---- Section: Hub Updates (managed appliance only) ----
+        if is_managed_appliance():
+            _hub_update_section(uid)
 
         # ---- Section 6: User Management (admin only) ----
         if is_admin():
