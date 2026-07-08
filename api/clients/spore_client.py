@@ -8,6 +8,7 @@ Endpoints implemented:
 - GET /api/readings/latest - Retrieve latest sensor data
 - GET /api/readings/all - Retrieve historical sensor data
 - POST /api/ambient-pressure - Set ambient pressure for calibration
+- GET /api/status - Device status (firmware version, warmup, calibration)
 - GET /spore-info - Get device information
 """
 
@@ -132,6 +133,24 @@ class SporeClient(BaseApiClient):
             return readings
         except ApiError as e:
             self.logger.error(f"Failed to get all readings: {e}")
+            raise
+
+    async def get_status(self) -> Dict[str, Any]:
+        """
+        Get device status from /api/status.
+
+        Returns:
+            Dict[str, Any]: Status JSON including device_name, firmware_version
+                (from the running image's app descriptor), warmup_state, and
+                calibration coordination fields.
+
+        Raises:
+            ApiError: If the request fails
+        """
+        try:
+            return await self.get("/api/status", parse_json=True)
+        except ApiError as e:
+            self.logger.error(f"Failed to get device status: {e}")
             raise
 
     async def set_ambient_pressure(self, pressure: int) -> str:

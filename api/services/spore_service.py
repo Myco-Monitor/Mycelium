@@ -13,7 +13,11 @@ from typing import Dict, List, Any, Optional
 from datetime import datetime
 
 from api.clients.spore_client import SporeClient
-from storage.tables.device_spore import update_device_status, get_device_spore
+from storage.tables.device_spore import (
+    update_device_status,
+    update_device_spore,
+    get_device_spore,
+)
 from storage.tables.readings_spore import create_reading, get_latest_reading
 
 
@@ -129,6 +133,37 @@ class SporeDataService:
         # Transform and store the reading
         stored_reading = await self.store_reading(device_id, reading)
         return stored_reading
+
+    async def refresh_firmware_version(self, device_id: int) -> Optional[str]:
+        """
+        Fetch the device's running firmware version and record it in the DB.
+
+        Reads /api/status, whose firmware_version comes from the running
+        image's app descriptor. Called by the polling service on each
+        offline->online transition (startup, outage recovery, post-OTA
+        reboot), so the stored version tracks reality without adding a
+        request to every poll.
+
+        Args:
+            device_id (int): ID of the device
+
+        Returns:
+            Optional[str]: The firmware version recorded, or None if the
+                device did not report one.
+        """
+        client = await self.get_client(device_id)
+        status = await client.get_status()
+        version = (status or {}).get("firmware_version") or ""
+        if not version:
+            return None
+
+        device = get_device_spore(device_id)
+        if device and device.get("firmware_version") != version:
+            update_device_spore(device_id, firmware_version=version)
+            self.logger.info(
+                f"Recorded firmware version {version} for Spore device {device_id}"
+            )
+        return version
 
     async def get_all_readings(self, device_id: int) -> List[Dict[str, Any]]:
         """

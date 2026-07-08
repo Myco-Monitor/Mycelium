@@ -265,6 +265,20 @@ class PollingService:
                         if not was_online:
                             await self.pressure_distribution.resend_to_spore(device)
 
+                            # Also record the running firmware version. Transitions
+                            # cover startup, outage recovery, and post-OTA reboots,
+                            # so this tracks version changes without adding a
+                            # request to every poll. Never fail the poll over it.
+                            try:
+                                await self.spore_service.refresh_firmware_version(
+                                    device_id
+                                )
+                            except Exception as fw_err:
+                                self.logger.warning(
+                                    f"Could not refresh firmware version for "
+                                    f"Spore device {device_id}: {fw_err}"
+                                )
+
                         self.logger.debug(
                             f"Successfully polled Spore device {device_id}"
                         )
@@ -309,11 +323,34 @@ class PollingService:
                         if device_id not in self.hyphae_service.clients:
                             await self.hyphae_service.initialize_client(device_id)
 
+                        # Was this Hyphae offline before this (successful) poll?
+                        was_online = (
+                            self.device_status["hyphae"]
+                            .get(device_id, {})
+                            .get("online", False)
+                        )
+
                         # Get the latest reading (raises on failure)
                         await self.hyphae_service.get_latest_reading(device_id)
 
                         # Update device status
                         self._update_device_status("hyphae", device_id, True)
+
+                        # On an offline->online transition, record the running
+                        # firmware version. Transitions cover startup, outage
+                        # recovery, and post-OTA reboots, so this tracks version
+                        # changes without adding a request to every poll. Never
+                        # fail the poll over it.
+                        if not was_online:
+                            try:
+                                await self.hyphae_service.refresh_firmware_version(
+                                    device_id
+                                )
+                            except Exception as fw_err:
+                                self.logger.warning(
+                                    f"Could not refresh firmware version for "
+                                    f"Hyphae device {device_id}: {fw_err}"
+                                )
 
                         self.logger.debug(
                             f"Successfully polled Hyphae device {device_id}"

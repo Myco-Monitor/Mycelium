@@ -13,7 +13,11 @@ from typing import Dict, List, Any, Optional
 from datetime import datetime, timedelta
 
 from api.clients.hyphae_client import HyphaeClient
-from storage.tables.device_hyphae import update_device_status, get_device_hyphae
+from storage.tables.device_hyphae import (
+    update_device_status,
+    update_device_hyphae,
+    get_device_hyphae,
+)
 from storage.tables.readings_hyphae import create_reading, get_latest_reading
 from storage.tables.relay_settings import (
     create_relay_setting,
@@ -177,6 +181,37 @@ class HyphaeDataService:
         # Transform and store the reading
         stored_reading = await self.store_reading(device_id, reading)
         return stored_reading
+
+    async def refresh_firmware_version(self, device_id: int) -> Optional[str]:
+        """
+        Fetch the device's running firmware version and record it in the DB.
+
+        Reads /api/system/info, whose firmware_version comes from the running
+        image's app descriptor. Called by the polling service on each
+        offline->online transition (startup, outage recovery, post-OTA
+        reboot), so the stored version tracks reality without adding a
+        request to every poll.
+
+        Args:
+            device_id (int): ID of the device
+
+        Returns:
+            Optional[str]: The firmware version recorded, or None if the
+                device did not report one.
+        """
+        client = await self.get_client(device_id)
+        info = await client.get_system_info()
+        version = (info or {}).get("firmware_version") or ""
+        if not version:
+            return None
+
+        device = get_device_hyphae(device_id)
+        if device and device.get("firmware_version") != version:
+            update_device_hyphae(device_id, firmware_version=version)
+            self.logger.info(
+                f"Recorded firmware version {version} for Hyphae device {device_id}"
+            )
+        return version
 
     async def get_all_readings(self, device_id: int) -> List[Dict[str, Any]]:
         """
