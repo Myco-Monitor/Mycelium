@@ -1,8 +1,9 @@
 """
 Analytics page for Mycelium NiceGUI application.
 
-Merges the dashboard analytics (pre-built charts) and notebook interface
-(interactive code cells) into a single tabbed page.
+Three tabs: Dashboard (pre-built charts), Graph Builder (curated ad-hoc
+charts over the readings tables), and Records (preview / download / delete
+raw readings). No code execution.
 """
 
 import csv
@@ -16,7 +17,87 @@ from nicegui import ui, app
 from web_ui.layout import page_layout, back_to_dashboard
 from web_ui.theme import get_colors
 
+from storage.tables import (
+    readings_spore,
+    readings_hyphae,
+    readings_pressure,
+    readings_weather,
+    device_spore,
+    device_hyphae,
+)
+
 logger = logging.getLogger("web_ui.analytics")
+
+
+# -- Readings source registry -------------------------------------------------
+# One entry per readings table, mapping it to its storage module, the device
+# list it is keyed to, and the numeric columns worth graphing. Both the Graph
+# Builder and Records panels drive off this so there is a single code path
+# instead of four near-duplicates.
+#
+# Call convention: get_device_readings / delete_device_readings take the device
+# id as the FIRST POSITIONAL arg in every module (spore/weather/hyphae name it
+# device_id, pressure names it hyphae_id), so always pass it positionally. For
+# readings_hyphae, relay_number is keyword-defaulted None, so the same call
+# shape works without special-casing. The timestamp column is `reading_ts` in
+# all four tables, returned ORDER BY reading_ts DESC.
+
+READINGS_SOURCES = {
+    "readings_spore": {
+        "label": "Spore Sensor Readings",
+        "module": readings_spore,
+        "device_fn": lambda: device_spore.get_all_device_spore(active_only=True),
+        "metrics": {"co2": "CO2 (ppm)", "temp": "Temp", "humidity": "Humidity (%)"},
+        "has_relay": False,
+    },
+    "readings_weather": {
+        "label": "Weather Readings",
+        "module": readings_weather,
+        "device_fn": lambda: device_spore.get_all_device_spore(active_only=True),
+        "metrics": {
+            "current_temp": "Temp",
+            "feels_like": "Feels Like",
+            "humidity": "Humidity (%)",
+            "ambient_pressure": "Pressure (hPa)",
+        },
+        "has_relay": False,
+    },
+    "readings_pressure": {
+        "label": "Pressure Readings",
+        "module": readings_pressure,
+        "device_fn": lambda: device_hyphae.get_all_device_hyphae(active_only=True),
+        "metrics": {"pressure_hpa": "Pressure (hPa)"},
+        "has_relay": False,
+    },
+    "readings_hyphae": {
+        "label": "Relay / Actuation Readings",
+        "module": readings_hyphae,
+        "device_fn": lambda: device_hyphae.get_all_device_hyphae(active_only=True),
+        "metrics": {"relay_state": "Relay State", "cooldown": "Cooldown"},
+        "has_relay": True,
+    },
+}
+
+# Explicit large cap for graph/records queries — get_device_readings defaults
+# to limit=100, which would silently truncate a real range.
+READINGS_QUERY_LIMIT = 100_000
+
+# Cap on rows rendered into the preview table (the true total still drives the
+# count label, CSV download, and delete).
+PREVIEW_ROW_CAP = 500
+
+
+def _normalize_end_ts(end_date: str) -> str:
+    """Widen a YYYY-MM-DD end bound to include the whole day.
+
+    reading_ts is a full timestamp and the table queries filter
+    `reading_ts <= end_ts`, so a bare date would exclude every reading on the
+    end date itself. Applied identically in preview, download, and delete so
+    the previewed count equals the deleted count.
+    """
+    if end_date and len(end_date) == 10:
+        return end_date + " 23:59:59"
+    return end_date
 
 
 # -- Temperature unit preference ---------------------------------------------
@@ -48,46 +129,6 @@ def _to_pref_temp(celsius, pref: str):
     except (TypeError, ValueError):
         return None
     return c * 9 / 5 + 32 if pref == "F" else c
-
-
-# -- Notebook state ----------------------------------------------------------
-
-
-def _default_cells():
-    """Return the default notebook cells list."""
-    return [{"id": 1, "code": "# Start here\n", "output": ""}]
-
-
-def _get_cells():
-    """Get notebook cells from user storage."""
-    stored = app.storage.user.get("notebook_cells")
-    if stored:
-        return stored
-    cells = _default_cells()
-    app.storage.user["notebook_cells"] = cells
-    return cells
-
-
-def _save_cells(cells):
-    """Persist notebook cells to user storage."""
-    app.storage.user["notebook_cells"] = cells
-
-
-def _next_cell_id(cells):
-    """Return the next available cell ID."""
-    return max(c["id"] for c in cells) + 1 if cells else 1
-
-
-def execute_code_cell(code: str) -> str:
-    """
-    Placeholder code execution.
-
-    Returns the code as-is. A real implementation would run the code
-    against the database and return formatted results.
-    """
-    if not code.strip():
-        return "(empty cell)"
-    return code
 
 
 # -- Chart builders -----------------------------------------------------------
@@ -253,7 +294,7 @@ def _empty_figure(message: str):
 @ui.page("/analytics")
 @ui.page("/analytics-dashboard")
 def analytics_page():
-    """Combined analytics page with Dashboard and Notebook tabs."""
+    """Analytics page with Dashboard, Graph Builder, and Records tabs."""
     user = app.storage.user
     if not user.get("user_id"):
         ui.navigate.to("/login")
@@ -300,7 +341,8 @@ def analytics_page():
 
         with ui.tabs().classes("w-full") as main_tabs:
             dashboard_tab = ui.tab("Dashboard", icon="bar_chart")
-            notebook_tab = ui.tab("Notebook", icon="code")
+            graph_tab = ui.tab("Graph Builder", icon="show_chart")
+            records_tab = ui.tab("Records", icon="table_rows")
 
         with ui.tab_panels(main_tabs, value=dashboard_tab).classes("w-full"):
             # ==============================================================
@@ -310,10 +352,16 @@ def analytics_page():
                 _build_dashboard_panel(analytics, rooms, state, colors)
 
             # ==============================================================
-            # NOTEBOOK TAB
+            # GRAPH BUILDER TAB
             # ==============================================================
-            with ui.tab_panel(notebook_tab):
-                _build_notebook_panel(colors)
+            with ui.tab_panel(graph_tab):
+                _build_graph_builder_panel(colors)
+
+            # ==============================================================
+            # RECORDS TAB
+            # ==============================================================
+            with ui.tab_panel(records_tab):
+                _build_records_panel(colors)
 
 
 # -- Dashboard panel ----------------------------------------------------------
@@ -604,205 +652,534 @@ def _build_insights(insights, colors):
                         ui.label(insight.action).classes("text-caption text-muted")
 
 
-# -- Notebook panel -----------------------------------------------------------
+# -- Shared filter-bar helpers (Graph Builder + Records) ----------------------
 
 
-def _build_notebook_panel(colors):
-    """Construct the notebook tab contents."""
-    cells = _get_cells()
+def _date_picker(label: str, value: str):
+    """Build a date input with a calendar popup; returns the ui.input.
 
-    @ui.refreshable
-    def notebook_cells():
-        for idx, cell in enumerate(cells):
-            _render_cell(cell, idx, cells, notebook_cells)
+    Mirrors the Dashboard filter-bar date pickers.
+    """
+    with ui.input(label, value=value).classes("w-40") as date_input:
+        with ui.menu().props("no-parent-event") as menu:
+            with ui.date().bind_value(date_input):
+                pass
+        with date_input.add_slot("append"):
+            ui.icon("edit_calendar").on("click", menu.open).classes("cursor-pointer")
+    return date_input
 
-    # Toolbar
+
+def _device_options(source: dict) -> dict:
+    """{device_id: device_name} options for a source's device list."""
+    options = {}
+    try:
+        for d in source["device_fn"]():
+            options[d["device_id"]] = d.get("device_name") or f"Device {d['device_id']}"
+    except Exception as e:
+        logger.warning(f"Failed to load device list: {e}")
+    return options
+
+
+def _relay_options(module, device_id) -> dict:
+    """{relay_number: label} for a hyphae device, plus an 'All relays' entry."""
+    options = {None: "All relays"}
+    try:
+        rows = module.get_device_readings(device_id, limit=READINGS_QUERY_LIMIT)
+        for n in sorted(
+            {r["relay_number"] for r in rows if r.get("relay_number") is not None}
+        ):
+            options[n] = f"Relay {n}"
+    except Exception as e:
+        logger.warning(f"Failed to load relay list: {e}")
+    return options
+
+
+def _query_readings(source: dict, device_id, start, end, relay=None):
+    """Fetch readings for one device over a date range, chronological order.
+
+    Returns (rows, truncated) where truncated flags a possible limit hit.
+    """
+    module = source["module"]
+    end_ts = _normalize_end_ts(end)
+    kwargs = {"limit": READINGS_QUERY_LIMIT, "start_ts": start, "end_ts": end_ts}
+    if source["has_relay"] and relay is not None:
+        kwargs["relay_number"] = relay
+    rows = module.get_device_readings(device_id, **kwargs)
+    truncated = len(rows) >= READINGS_QUERY_LIMIT
+    # Tables return newest-first; reverse to chronological for plotting/preview.
+    rows = list(reversed(rows))
+    return rows, truncated
+
+
+# -- Graph Builder panel ------------------------------------------------------
+
+
+def _build_metric_chart(rows, metric_specs, chart_type, colors):
+    """Generic multi-metric, multi-axis chart over readings rows.
+
+    metric_specs: list of (field, label) in selection order. Metrics with
+    differing unit labels are placed on separate y-axes (up to 3), mirroring
+    the Dashboard env-trends chart. `rows` must already be chronological.
+    """
+    if not rows or not metric_specs:
+        return _empty_figure("No data for selected filters")
+
+    x = [r.get("reading_ts", "") for r in rows]
+    palette = ["#ef5350", "#42a5f5", "#66bb6a", "#ffa726", "#ab47bc", "#26c6da"]
+
+    # Assign each distinct unit label to an axis (y, y2, y3). Group by the
+    # label text so like-united metrics share a scale.
+    axis_for_label = {}
+    axis_names = ["y", "y2", "y3"]
+    over_axis_limit = False
+
+    fig = go.Figure()
+    for i, (field, label) in enumerate(metric_specs):
+        if label not in axis_for_label:
+            if len(axis_for_label) < len(axis_names):
+                axis_for_label[label] = axis_names[len(axis_for_label)]
+            else:
+                over_axis_limit = True
+                continue
+        yaxis = axis_for_label[label]
+        color = palette[i % len(palette)]
+        y = [r.get(field) for r in rows]
+
+        if chart_type == "bar":
+            fig.add_trace(go.Bar(x=x, y=y, name=label, yaxis=yaxis, marker_color=color))
+        elif chart_type == "stepped":
+            fig.add_trace(
+                go.Scatter(
+                    x=x,
+                    y=y,
+                    name=label,
+                    yaxis=yaxis,
+                    mode="lines",
+                    line=dict(color=color, shape="hv"),
+                )
+            )
+        elif chart_type == "area":
+            fig.add_trace(
+                go.Scatter(
+                    x=x,
+                    y=y,
+                    name=label,
+                    yaxis=yaxis,
+                    mode="lines",
+                    fill="tozeroy",
+                    line=dict(color=color),
+                )
+            )
+        else:  # line
+            fig.add_trace(
+                go.Scatter(
+                    x=x,
+                    y=y,
+                    name=label,
+                    yaxis=yaxis,
+                    mode="lines",
+                    line=dict(color=color),
+                )
+            )
+
+    # Build axis layout from the labels we actually assigned.
+    label_by_axis = {v: k for k, v in axis_for_label.items()}
+    layout = dict(
+        template="plotly_dark",
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        margin=dict(l=60, r=60, t=30, b=40),
+        legend=dict(orientation="h", y=1.12),
+        xaxis=dict(title="Time"),
+        yaxis=dict(title=label_by_axis.get("y", "")),
+    )
+    if "y2" in label_by_axis:
+        layout["yaxis2"] = dict(
+            title=label_by_axis["y2"], side="right", overlaying="y", showgrid=False
+        )
+    if "y3" in label_by_axis:
+        layout["yaxis3"] = dict(
+            title=label_by_axis["y3"],
+            side="right",
+            overlaying="y",
+            anchor="free",
+            position=0.95,
+            showgrid=False,
+        )
+    fig.update_layout(**layout)
+    fig._over_axis_limit = over_axis_limit  # read by caller for a warning
+    return fig
+
+
+def _build_graph_builder_panel(colors):
+    """Curated ad-hoc chart builder over the readings tables (no code)."""
+    default_source = "readings_spore"
+    src = READINGS_SOURCES[default_source]
+
+    today = datetime.now().strftime("%Y-%m-%d")
+    default_start = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+
+    chart_container = ui.column().classes("w-full gap-2")
+
     with ui.card().classes("w-full p-3"):
-        with ui.row().classes("gap-2 flex-wrap"):
+        with ui.row().classes("w-full items-end gap-3 flex-wrap"):
+            source_select = ui.select(
+                {k: v["label"] for k, v in READINGS_SOURCES.items()},
+                value=default_source,
+                label="Data Source",
+            ).classes("w-52")
 
-            def _run_all():
-                for cell in cells:
-                    cell["output"] = execute_code_cell(cell["code"])
-                _save_cells(cells)
-                notebook_cells.refresh()
+            device_select = ui.select(_device_options(src), label="Device").classes(
+                "w-52"
+            )
 
-            ui.button("Run All Cells", icon="play_arrow", on_click=_run_all).props(
+            metrics_select = (
+                ui.select(src["metrics"], multiple=True, label="Metrics")
+                .classes("w-64")
+                .props("use-chips")
+            )
+
+            relay_select = ui.select(
+                {None: "All relays"}, value=None, label="Relay"
+            ).classes("w-40")
+            relay_select.set_visibility(src["has_relay"])
+
+            start_input = _date_picker("Start Date", default_start)
+            end_input = _date_picker("End Date", today)
+
+            with ui.row().classes("gap-1"):
+                for lbl, days in [("7d", 7), ("30d", 30), ("90d", 90), ("1y", 365)]:
+
+                    def _quick(d=days):
+                        new_start = (
+                            datetime.strptime(end_input.value or today, "%Y-%m-%d")
+                            - timedelta(days=d)
+                        ).strftime("%Y-%m-%d")
+                        start_input.set_value(new_start)
+
+                    ui.button(lbl, on_click=_quick).props("flat dense size=sm")
+
+            chart_type_select = ui.select(
+                ["line", "area", "bar"], value="line", label="Chart Type"
+            ).classes("w-36")
+
+            def _on_source_change():
+                new_src = READINGS_SOURCES[source_select.value]
+                device_select.options = _device_options(new_src)
+                device_select.value = None
+                device_select.update()
+                metrics_select.options = new_src["metrics"]
+                metrics_select.value = []
+                metrics_select.update()
+                relay_select.set_visibility(new_src["has_relay"])
+                relay_select.options = {None: "All relays"}
+                relay_select.value = None
+                relay_select.update()
+                # Relay data is a 0/1 step series; force stepped and lock it.
+                if new_src["has_relay"]:
+                    chart_type_select.value = "stepped"
+                    chart_type_select.options = ["stepped"]
+                else:
+                    chart_type_select.options = ["line", "area", "bar"]
+                    if chart_type_select.value == "stepped":
+                        chart_type_select.value = "line"
+                chart_type_select.update()
+
+            source_select.on("update:model-value", lambda _: _on_source_change())
+
+            def _on_device_change():
+                new_src = READINGS_SOURCES[source_select.value]
+                if new_src["has_relay"] and device_select.value is not None:
+                    relay_select.options = _relay_options(
+                        new_src["module"], device_select.value
+                    )
+                    relay_select.value = None
+                    relay_select.update()
+
+            device_select.on("update:model-value", lambda _: _on_device_change())
+
+            ui.button(
+                "Generate", icon="show_chart", on_click=lambda: _generate()
+            ).props("dense")
+
+    def _generate():
+        chart_container.clear()
+        source = READINGS_SOURCES[source_select.value]
+        device_id = device_select.value
+        selected = list(metrics_select.value or [])
+        if device_id is None:
+            ui.notify("Pick a device", type="warning")
+            return
+        if not selected:
+            ui.notify("Pick at least one metric", type="warning")
+            return
+        try:
+            rows, truncated = _query_readings(
+                source,
+                device_id,
+                start_input.value,
+                end_input.value,
+                relay=relay_select.value if source["has_relay"] else None,
+            )
+        except Exception as e:
+            ui.notify(f"Query failed: {e}", type="negative")
+            return
+
+        if truncated:
+            ui.notify(
+                f"Showing newest {READINGS_QUERY_LIMIT:,} points; range may be truncated",
+                type="warning",
+            )
+
+        chart_type = chart_type_select.value or "line"
+        # Relay data with no single relay chosen: one stepped trace per relay.
+        if source["has_relay"] and relay_select.value is None:
+            fig = _build_relay_chart(rows, colors)
+        else:
+            metric_specs = [(f, source["metrics"][f]) for f in selected]
+            fig = _build_metric_chart(rows, metric_specs, chart_type, colors)
+            if getattr(fig, "_over_axis_limit", False):
+                ui.notify(
+                    "More than 3 distinct units selected; extra metrics were dropped",
+                    type="warning",
+                )
+
+        with chart_container:
+            ui.plotly(fig).classes("w-full").style("height: 420px")
+            ui.label(f"{len(rows):,} data points").classes("text-caption text-muted")
+
+    with chart_container:
+        ui.label("Choose a source, device, and metrics, then Generate.").classes(
+            "text-muted p-4"
+        )
+
+
+def _build_relay_chart(rows, colors):
+    """Stepped 0/1 chart with one trace per relay_number."""
+    if not rows:
+        return _empty_figure("No data for selected filters")
+    palette = ["#ef5350", "#42a5f5", "#66bb6a", "#ffa726", "#ab47bc", "#26c6da"]
+    by_relay = {}
+    for r in rows:
+        by_relay.setdefault(r.get("relay_number"), []).append(r)
+    fig = go.Figure()
+    for i, (relay, rrows) in enumerate(
+        sorted(by_relay.items(), key=lambda kv: (kv[0] is None, kv[0]))
+    ):
+        fig.add_trace(
+            go.Scatter(
+                x=[r.get("reading_ts", "") for r in rrows],
+                y=[r.get("relay_state") for r in rrows],
+                name=f"Relay {relay}",
+                mode="lines",
+                line=dict(color=palette[i % len(palette)], shape="hv"),
+            )
+        )
+    fig.update_layout(
+        template="plotly_dark",
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        margin=dict(l=60, r=20, t=30, b=40),
+        legend=dict(orientation="h", y=1.12),
+        xaxis=dict(title="Time"),
+        yaxis=dict(title="Relay State", tickvals=[0, 1], range=[-0.1, 1.1]),
+    )
+    return fig
+
+
+# -- Records panel ------------------------------------------------------------
+
+
+def _build_records_panel(colors):
+    """Preview, download, and (admin-only) delete raw readings rows."""
+    from web_ui.auth import is_admin
+
+    default_source = "readings_spore"
+    src = READINGS_SOURCES[default_source]
+
+    today = datetime.now().strftime("%Y-%m-%d")
+    default_start = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+
+    # Selection shared by Preview / Download / Delete so they act on the same set.
+    sel = {"rows": [], "total": 0}
+
+    preview_container = ui.column().classes("w-full gap-2")
+
+    with ui.card().classes("w-full p-3"):
+        with ui.row().classes("w-full items-end gap-3 flex-wrap"):
+            source_select = ui.select(
+                {k: v["label"] for k, v in READINGS_SOURCES.items()},
+                value=default_source,
+                label="Data Source",
+            ).classes("w-52")
+
+            device_options = {"__all__": "All devices"}
+            device_options.update(_device_options(src))
+            device_select = ui.select(
+                device_options, value="__all__", label="Device"
+            ).classes("w-52")
+
+            relay_select = ui.select(
+                {None: "All relays"}, value=None, label="Relay"
+            ).classes("w-40")
+            relay_select.set_visibility(src["has_relay"])
+
+            start_input = _date_picker("Start Date", default_start)
+            end_input = _date_picker("End Date", today)
+
+            def _on_source_change():
+                new_src = READINGS_SOURCES[source_select.value]
+                opts = {"__all__": "All devices"}
+                opts.update(_device_options(new_src))
+                device_select.options = opts
+                device_select.value = "__all__"
+                device_select.update()
+                relay_select.set_visibility(new_src["has_relay"])
+                relay_select.options = {None: "All relays"}
+                relay_select.value = None
+                relay_select.update()
+
+            source_select.on("update:model-value", lambda _: _on_source_change())
+
+            ui.button("Preview", icon="search", on_click=lambda: _preview()).props(
                 "dense"
             )
 
-            def _add_cell():
-                cells.append({"id": _next_cell_id(cells), "code": "", "output": ""})
-                _save_cells(cells)
-                notebook_cells.refresh()
+    def _target_ids(source):
+        """Device ids to act on: the selected one, or all for this source."""
+        if device_select.value == "__all__":
+            try:
+                return [d["device_id"] for d in source["device_fn"]()]
+            except Exception as e:
+                logger.warning(f"Failed to list devices: {e}")
+                return []
+        return [device_select.value]
 
-            ui.button("Add Cell", icon="add", on_click=_add_cell).props("dense outline")
+    def _collect_rows(source):
+        """Fetch matching rows across all target devices (chronological)."""
+        rows = []
+        for dev_id in _target_ids(source):
+            try:
+                got, _ = _query_readings(
+                    source,
+                    dev_id,
+                    start_input.value,
+                    end_input.value,
+                    relay=relay_select.value if source["has_relay"] else None,
+                )
+                rows.extend(got)
+            except Exception as e:
+                logger.warning(f"Failed to query device {dev_id}: {e}")
+        return rows
 
-            def _save_nb():
-                _save_cells(cells)
-                ui.notify("Notebook saved", type="positive")
+    def _scope_label(source):
+        if device_select.value == "__all__":
+            return "all devices"
+        name = (
+            source_select.value and device_select.options.get(device_select.value)
+        ) or "device"
+        return f"'{name}'"
 
-            ui.button("Save Notebook", icon="save", on_click=_save_nb).props(
-                "dense outline"
-            )
+    def _preview():
+        preview_container.clear()
+        source = READINGS_SOURCES[source_select.value]
+        rows = _collect_rows(source)
+        sel["rows"] = rows
+        sel["total"] = len(rows)
 
-            def _clear_all():
-                cells.clear()
-                cells.extend(_default_cells())
-                _save_cells(cells)
-                notebook_cells.refresh()
+        with preview_container:
+            with ui.row().classes("w-full items-center gap-3"):
+                ui.label(f"{len(rows):,} rows match").classes("text-subtitle2")
+                ui.button(
+                    "Download CSV", icon="download", on_click=lambda: _download()
+                ).props("dense outline")
+                if is_admin():
+                    ui.button(
+                        "Delete",
+                        icon="delete_forever",
+                        on_click=lambda: _confirm_delete(),
+                    ).props("dense color=negative outline")
 
-            ui.button("Clear All", icon="delete_sweep", on_click=_clear_all).props(
-                "dense outline color=negative"
-            )
+            if not rows:
+                ui.label("No rows for the selected filters.").classes("text-muted")
+                return
 
-    # Cells area
-    notebook_cells()
+            columns = [
+                {"name": c, "label": c, "field": c, "align": "left"}
+                for c in rows[0].keys()
+            ]
+            display_rows = rows[:PREVIEW_ROW_CAP]
+            if len(rows) > PREVIEW_ROW_CAP:
+                ui.label(
+                    f"Showing first {PREVIEW_ROW_CAP:,} of {len(rows):,} rows "
+                    f"(download / delete act on all {len(rows):,})."
+                ).classes("text-caption text-muted")
+            ui.table(columns=columns, rows=display_rows, row_key="reading_ts").classes(
+                "w-full"
+            ).props("dense")
 
-    # Quick reference card
-    with ui.card().classes("w-full p-4 q-mt-md"):
-        ui.label("Database Quick Reference").classes(
-            "text-subtitle1 text-weight-bold q-mb-sm"
+    def _download():
+        rows = sel["rows"]
+        if not rows:
+            ui.notify("No data to export", type="warning")
+            return
+        output = io.StringIO()
+        writer = csv.DictWriter(output, fieldnames=rows[0].keys())
+        writer.writeheader()
+        writer.writerows(rows)
+        scope = "all" if device_select.value == "__all__" else device_select.value
+        ui.download(
+            output.getvalue().encode(),
+            f"{source_select.value}_{scope}_{start_input.value}_{end_input.value}.csv",
         )
-        ui.label(
-            "Common functions and key tables for querying the Mycelium database."
-        ).classes("text-caption text-muted q-mb-md")
 
-        with ui.row().classes("w-full gap-4 flex-wrap"):
-            with ui.column().classes("flex-1 min-w-64"):
-                ui.label("Key Tables").classes(
-                    "text-subtitle2 text-weight-bold q-mb-xs"
-                )
-                _ref_items(
-                    [
-                        (
-                            "readings_spore",
-                            "Sensor readings (co2, temp, humidity, reading_ts)",
-                        ),
-                        (
-                            "device_spore",
-                            "Spore devices (device_id, device_name, room_id)",
-                        ),
-                        (
-                            "device_hyphae",
-                            "Hyphae controllers (device_id, device_name)",
-                        ),
-                        ("grow_rooms", "Grow rooms (room_id, room_name, farm_id)"),
-                        (
-                            "harvest",
-                            "Harvest records (harvest_id, harvest_ts, total_wt)",
-                        ),
-                        ("bulk", "Bulk substrates (bulk_id, bulk_name, room_id)"),
-                    ]
-                )
+    def _confirm_delete():
+        if not is_admin():
+            ui.notify("Only an admin can delete records.", type="negative")
+            return
+        source = READINGS_SOURCES[source_select.value]
+        count = sel["total"]
+        if count == 0:
+            ui.notify("Nothing to delete — run Preview first.", type="warning")
+            return
 
-            with ui.column().classes("flex-1 min-w-64"):
-                ui.label("Common Queries").classes(
-                    "text-subtitle2 text-weight-bold q-mb-xs"
-                )
-                _ref_code_items(
-                    [
-                        'SELECT AVG(co2), AVG(temp) FROM readings_spore WHERE reading_ts >= date("now", "-7 days")',
-                        "SELECT room_name, COUNT(*) FROM grow_rooms gr JOIN device_spore ds ON gr.room_id = ds.room_id GROUP BY room_name",
-                        "SELECT DATE(harvest_ts) as day, SUM(total_wt) FROM harvest GROUP BY day ORDER BY day DESC LIMIT 10",
-                    ]
-                )
+        with ui.dialog() as dlg, ui.card():
+            ui.label(
+                f"Permanently delete {count:,} rows from {source['label']} "
+                f"for {_scope_label(source)} between {start_input.value} and "
+                f"{end_input.value}?"
+            ).classes("text-body1")
+            ui.label("This cannot be undone.").classes("text-caption text-negative")
+            with ui.row().classes("justify-end gap-2 w-full"):
+                ui.button(
+                    "Download CSV first", icon="download", on_click=_download
+                ).props("flat")
+                ui.button("Cancel", on_click=dlg.close).props("flat")
+                ui.button("Delete", color="negative", on_click=lambda: _do_delete(dlg))
 
-            with ui.column().classes("flex-1 min-w-64"):
-                ui.label("Service Functions").classes(
-                    "text-subtitle2 text-weight-bold q-mb-xs"
-                )
-                _ref_items(
-                    [
-                        (
-                            "analytics.get_readings_for_period(start, end, room_id)",
-                            "Fetch readings",
-                        ),
-                        (
-                            "analytics.calculate_environmental_stats(readings)",
-                            "Compute stats",
-                        ),
-                        (
-                            "analytics.get_harvests_for_period(start, end, room_id)",
-                            "Fetch harvests",
-                        ),
-                        (
-                            "analytics.get_hourly_pattern(start, end, room_id)",
-                            "Hourly averages",
-                        ),
-                        (
-                            "analytics.generate_insights(start, end, room_id)",
-                            "Auto insights",
-                        ),
-                    ]
-                )
+        dlg.open()
 
+    def _do_delete(dlg):
+        dlg.close()
+        if not is_admin():
+            ui.notify("Only an admin can delete records.", type="negative")
+            return
+        source = READINGS_SOURCES[source_select.value]
+        module = source["module"]
+        end_ts = _normalize_end_ts(end_input.value)
+        deleted = 0
+        for dev_id in _target_ids(source):
+            try:
+                kwargs = {"start_ts": start_input.value, "end_ts": end_ts}
+                if source["has_relay"] and relay_select.value is not None:
+                    kwargs["relay_number"] = relay_select.value
+                deleted += module.delete_device_readings(dev_id, **kwargs)
+            except Exception as e:
+                logger.warning(f"Failed to delete for device {dev_id}: {e}")
+        ui.notify(f"Deleted {deleted:,} rows", type="positive")
+        _preview()
 
-def _render_cell(cell, idx, cells, refresh_fn):
-    """Render a single notebook cell."""
-    with ui.card().classes("w-full q-mb-sm"):
-        with ui.row().classes("items-center justify-between p-2"):
-            ui.label(f"Cell {idx + 1}").classes(
-                "text-caption text-weight-bold text-muted"
-            )
-            with ui.row().classes("gap-1"):
-
-                def _run_cell(c=cell):
-                    c["output"] = execute_code_cell(c["code"])
-                    _save_cells(cells)
-                    refresh_fn.refresh()
-
-                ui.button(icon="play_arrow", on_click=_run_cell).props(
-                    "flat dense size=sm color=positive"
-                )
-
-                def _delete_cell(c=cell):
-                    cells.remove(c)
-                    if not cells:
-                        cells.extend(_default_cells())
-                    _save_cells(cells)
-                    refresh_fn.refresh()
-
-                ui.button(icon="delete", on_click=_delete_cell).props(
-                    "flat dense size=sm color=negative"
-                )
-
-        # Code input
-        ui.textarea(
-            value=cell["code"],
-            on_change=lambda e, c=cell: c.update(code=e.value),
-        ).classes("w-full").props('outlined dense input-style="font-family: monospace"')
-
-        # Output area
-        if cell.get("output"):
-            with (
-                ui.card()
-                .classes("w-full q-mt-xs p-2")
-                .style(
-                    "background-color: rgba(0,0,0,0.15); border-left: 3px solid grey;"
-                )
-            ):
-                ui.label("Output:").classes("text-caption text-muted")
-                ui.html(
-                    f'<pre style="white-space: pre-wrap; margin: 0; font-family: monospace;">'
-                    f"{cell['output']}</pre>"
-                )
-
-
-def _ref_items(items):
-    """Render a list of reference items (name + description)."""
-    for name, desc in items:
-        with ui.row().classes("items-start gap-2 q-mb-xs"):
-            ui.label(name).classes("text-caption text-weight-bold").style(
-                "font-family: monospace"
-            )
-            ui.label(desc).classes("text-caption text-muted")
-
-
-def _ref_code_items(items):
-    """Render a list of code snippet reference items."""
-    for code in items:
-        ui.html(
-            f'<pre style="white-space: pre-wrap; margin: 0 0 8px 0; font-family: monospace; '
-            f'font-size: 0.8em; padding: 6px; background: rgba(0,0,0,0.1); border-radius: 4px;">'
-            f"{code}</pre>"
+    with preview_container:
+        ui.label("Choose a source, device, and date range, then Preview.").classes(
+            "text-muted p-4"
         )
