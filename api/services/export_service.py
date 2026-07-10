@@ -220,15 +220,21 @@ class ExportService:
             )
             if harvests:
                 harvest_df = pd.DataFrame(harvests)
+                # bulk_name/room_name aren't in the harvest query today (the
+                # business subsystem that would join them isn't built yet), so
+                # select only the columns actually present. This keeps the
+                # export from crashing on a KeyError while still picking those
+                # names up automatically once a future join provides them.
+                preferred = [
+                    "harvest_id",
+                    "harvest_date",
+                    "yield_weight",
+                    "trimmed_wt",
+                    "bulk_name",
+                    "room_name",
+                ]
                 harvest_df = harvest_df[
-                    [
-                        "harvest_id",
-                        "harvest_date",
-                        "yield_weight",
-                        "trimmed_wt",
-                        "bulk_name",
-                        "room_name",
-                    ]
+                    [c for c in preferred if c in harvest_df.columns]
                 ]
                 harvest_df.to_excel(writer, sheet_name="Harvests", index=False)
 
@@ -320,14 +326,18 @@ class ExportService:
             # Harvest details
             if harvests:
                 harvest_df = pd.DataFrame(harvests)
+                # See export_readings_excel: bulk_name/room_name aren't in the
+                # harvest query yet, so select only the columns present to avoid
+                # a KeyError; they'll appear automatically if a join adds them.
+                preferred = [
+                    "harvest_date",
+                    "yield_weight",
+                    "trimmed_wt",
+                    "bulk_name",
+                    "room_name",
+                ]
                 harvest_df = harvest_df[
-                    [
-                        "harvest_date",
-                        "yield_weight",
-                        "trimmed_wt",
-                        "bulk_name",
-                        "room_name",
-                    ]
+                    [c for c in preferred if c in harvest_df.columns]
                 ]
                 harvest_df.to_excel(writer, sheet_name="Harvest Details", index=False)
 
