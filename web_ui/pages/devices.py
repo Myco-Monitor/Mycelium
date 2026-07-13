@@ -15,6 +15,7 @@ from typing import Optional, Dict, List
 
 import requests
 
+from api.clients.base_client import create_device_ssl_context
 from nicegui import ui, app, run
 from web_ui.layout import page_layout, back_to_dashboard
 from web_ui.theme import get_colors, STATUS_COLORS
@@ -48,6 +49,24 @@ _TIMEOUT = 5
 _CA_CERT = str(Path(__file__).parent.parent.parent / "config" / "ca_root.pem")
 
 
+class _DeviceTLSAdapter(requests.adapters.HTTPAdapter):
+    """Route sync device HTTPS through the shared device-CA SSL context.
+
+    requests/urllib3 build their own default context, which on Python 3.13
+    enables VERIFY_X509_STRICT and rejects the fleet CA root (no keyUsage
+    extension) — the same problem create_device_ssl_context() already
+    handles for the aiohttp clients.
+    """
+
+    def init_poolmanager(self, connections, maxsize, block=False, **kwargs):
+        kwargs["ssl_context"] = create_device_ssl_context()
+        return super().init_poolmanager(connections, maxsize, block, **kwargs)
+
+
+_device_http = requests.Session()
+_device_http.mount("https://", _DeviceTLSAdapter())
+
+
 def _device_url(ip: str, path: str) -> str:
     """Build a device URL. Supports an optional ip:port (e.g. for local simulators)."""
     return f"{_SCHEME}://{ip}{path}"
@@ -57,7 +76,7 @@ def _get_json(ip: str, path: str) -> Optional[Dict]:
     """GET a JSON endpoint from a device. Returns None on any error."""
     try:
         verify = _CA_CERT if Path(_CA_CERT).exists() else False
-        r = requests.get(_device_url(ip, path), timeout=_TIMEOUT, verify=verify)
+        r = _device_http.get(_device_url(ip, path), timeout=_TIMEOUT, verify=verify)
         if r.status_code == 200:
             return r.json()
     except Exception as e:
@@ -69,7 +88,7 @@ def _get_text(ip: str, path: str) -> Optional[str]:
     """GET an HTML/text endpoint from a device. Returns None on any error."""
     try:
         verify = _CA_CERT if Path(_CA_CERT).exists() else False
-        r = requests.get(_device_url(ip, path), timeout=_TIMEOUT, verify=verify)
+        r = _device_http.get(_device_url(ip, path), timeout=_TIMEOUT, verify=verify)
         if r.status_code == 200:
             return r.text
     except Exception as e:
