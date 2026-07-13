@@ -10,7 +10,7 @@ Farm and room management has been moved to the Farm Overview page.
 from nicegui import ui, app, run
 from web_ui.layout import page_layout, back_to_dashboard
 from web_ui.theme import get_colors
-from web_ui.format import fmt_datetime
+from web_ui.format import fmt_datetime, canonical_tz
 from web_ui.auth import is_admin
 from web_ui.updates import is_managed_appliance
 from api.services.hub_update_service import (
@@ -34,14 +34,17 @@ from storage.tables.user_settings import (
     count_admins,
 )
 
-US_TIMEZONES = [
-    "US/Eastern",
-    "US/Central",
-    "US/Mountain",
-    "US/Pacific",
-    "US/Alaska",
-    "US/Hawaii",
-]
+# Canonical IANA names (legacy "US/*" aliases need Debian's optional
+# tzdata-legacy package; stored legacy values are mapped via canonical_tz).
+US_TIMEZONES = {
+    "America/New_York": "Eastern (ET)",
+    "America/Chicago": "Central (CT)",
+    "America/Denver": "Mountain (MT)",
+    "America/Phoenix": "Arizona (no DST)",
+    "America/Los_Angeles": "Pacific (PT)",
+    "America/Anchorage": "Alaska (AKT)",
+    "Pacific/Honolulu": "Hawaii (HST)",
+}
 
 
 def _readonly_field(label: str, value: str, hint: str = ""):
@@ -261,7 +264,9 @@ def _hub_update_section(uid):
             outcome = result.get("result")
             if outcome == "success":
                 record_update_result(update_id, "success", to_version=result.get("to"))
-                ui.notify(f"Update to {ref} applied. The hub is restarting.", type="positive")
+                ui.notify(
+                    f"Update to {ref} applied. The hub is restarting.", type="positive"
+                )
                 ui.notification(
                     "Finishing update — the hub is restarting. This page will "
                     "reconnect automatically in about 30 seconds.",
@@ -301,11 +306,7 @@ def _hub_update_section(uid):
                 ui.label(
                     "Enter your device PIN to apply. The hub will restart."
                 ).classes("text-caption text-muted")
-                pin_in = (
-                    ui.input("Device PIN")
-                    .props("type=password")
-                    .classes("w-full")
-                )
+                pin_in = ui.input("Device PIN").props("type=password").classes("w-full")
                 with ui.row().classes("justify-end w-full q-gutter-sm"):
                     ui.button("Cancel", on_click=lambda: dlg.submit(None)).props("flat")
                     ui.button(
@@ -327,7 +328,9 @@ def _hub_update_section(uid):
             await _run_update(ref)
 
         async def _check():
-            progress = ui.notification("Checking for updates…", spinner=True, timeout=None)
+            progress = ui.notification(
+                "Checking for updates…", spinner=True, timeout=None
+            )
             try:
                 info = await run.io_bound(check_for_update)
             finally:
@@ -340,12 +343,16 @@ def _hub_update_section(uid):
             info = state["info"] or {}
             ref = info.get("latest_ref")
             if not info.get("update_available") or not ref:
-                ui.notify("No update available. Check for updates first.", type="warning")
+                ui.notify(
+                    "No update available. Check for updates first.", type="warning"
+                )
                 return
             await _confirm_and_update(ref)
 
         with ui.row().classes("q-mt-md q-gutter-sm"):
-            ui.button("Check for updates", icon="refresh", on_click=_check).props("outline")
+            ui.button("Check for updates", icon="refresh", on_click=_check).props(
+                "outline"
+            )
             update_btn = ui.button(
                 "Update now", icon="system_update", on_click=_update
             ).props("color=primary")
@@ -410,11 +417,14 @@ def settings_page():
             ui.label("Timezone").classes("text-weight-bold")
             tz_select = ui.select(
                 options=US_TIMEZONES,
-                value=user_info.get("timezone_name") or "US/Eastern",
+                value=canonical_tz(user_info.get("timezone_name")),
             ).classes("w-full")
 
             def _save_tz(e):
                 update_user_setting(uid, timezone_name=tz_select.value)
+                # Cache in session storage so the new timezone applies
+                # immediately across pages (see web_ui/format.get_timezone_name).
+                app.storage.user["timezone_name"] = tz_select.value
                 ui.notify("Timezone saved", type="positive")
 
             tz_select.on("update:model-value", _save_tz)

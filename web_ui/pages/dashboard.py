@@ -6,7 +6,7 @@ status, active alerts, per-room environment (CO2 / temp / humidity averaged
 from the latest spore readings), and local weather.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from nicegui import ui, app
 from web_ui.layout import page_layout
@@ -333,7 +333,9 @@ def _reading_age_seconds(reading_ts) -> float | None:
     if not reading_ts:
         return None
     try:
-        return (datetime.now() - datetime.fromisoformat(reading_ts)).total_seconds()
+        # reading_ts is naive UTC; compare against naive UTC now
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        return (now - datetime.fromisoformat(reading_ts)).total_seconds()
     except (ValueError, TypeError):
         return None
 

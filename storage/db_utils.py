@@ -6,7 +6,7 @@ and performing common operations.
 """
 
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Tuple
 
@@ -93,9 +93,21 @@ def execute_insert(query: str, params: Tuple = ()) -> int:
 
 def get_timestamp() -> str:
     """
-    Get the current timestamp in ISO format.
+    Get the current UTC timestamp in ISO format.
+
+    All persisted timestamps are naive UTC; the web UI converts to the
+    user's configured timezone at display time (web_ui/format.py).
 
     Returns:
-        str: Current timestamp in ISO format (YYYY-MM-DD HH:MM:SS).
+        str: Current UTC timestamp in ISO format (YYYY-MM-DD HH:MM:SS).
     """
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def utc_now_iso() -> str:
+    """Current UTC time as a naive datetime.isoformat() string.
+
+    Use for reading_ts-style columns (they carry sub-second precision and a
+    'T' separator, unlike get_timestamp()).
+    """
+    return datetime.now(timezone.utc).replace(tzinfo=None).isoformat()

@@ -4,7 +4,7 @@ CRUD operations for alert_history table.
 Tracks triggered alerts and their resolution status.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any, List
 
 from storage.db_utils import get_connection
@@ -144,7 +144,9 @@ def get_alert_history(days: int = 7, limit: int = 100) -> List[Dict[str, Any]]:
     Returns:
         List of alert records
     """
-    cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+    cutoff = (
+        datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=days)
+    ).isoformat()
 
     conn = get_connection()
     cursor = conn.cursor()
@@ -182,7 +184,9 @@ def get_alerts_for_device(
     Returns:
         List of alert records
     """
-    cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+    cutoff = (
+        datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=days)
+    ).isoformat()
 
     conn = get_connection()
     cursor = conn.cursor()
@@ -394,7 +398,9 @@ def cleanup_old_alerts(days: int = 30) -> int:
     Returns:
         Number of records deleted
     """
-    cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+    cutoff = (
+        datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=days)
+    ).isoformat()
 
     conn = get_connection()
     cursor = conn.cursor()

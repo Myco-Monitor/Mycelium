@@ -10,7 +10,7 @@ This module provides services for handling Hyphae device data, including:
 
 import logging
 from typing import Dict, List, Any, Optional
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from api.clients.hyphae_client import HyphaeClient
 from storage.tables.device_hyphae import (
@@ -174,7 +174,8 @@ class HyphaeDataService:
 
         states = state.get("states", []) if isinstance(state, dict) else []
         reading = {
-            "timestamp": datetime.now().isoformat(),
+            # Naive UTC, matching every persisted timestamp (display converts)
+            "timestamp": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
             "relay_states": [1 if s else 0 for s in states],
         }
 
@@ -856,13 +857,13 @@ class HyphaeDataService:
         Returns:
             Dict[str, Any]: Transformed reading
         """
-        # Parse the timestamp
+        # Parse the timestamp (persisted timestamps are naive UTC)
         try:
-            # Try to parse the timestamp as ISO format
             timestamp = datetime.fromisoformat(reading.get("timestamp", ""))
         except (ValueError, TypeError):
-            # If that fails, use the current time
-            timestamp = datetime.now()
+            timestamp = datetime.now(timezone.utc)
+        if timestamp.tzinfo is not None:
+            timestamp = timestamp.astimezone(timezone.utc).replace(tzinfo=None)
 
         # Format the timestamp as ISO format
         timestamp_str = timestamp.isoformat()

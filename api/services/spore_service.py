@@ -10,7 +10,7 @@ This module provides services for handling Spore device data, including:
 
 import logging
 from typing import Dict, List, Any, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 
 from api.clients.spore_client import SporeClient
 from storage.tables.device_spore import (
@@ -351,13 +351,22 @@ class SporeDataService:
         Returns:
             Dict[str, Any]: Transformed reading
         """
-        # Parse the timestamp
-        try:
-            # Try to parse the timestamp as ISO format
-            timestamp = datetime.fromisoformat(reading["timestamp"])
-        except (ValueError, TypeError):
-            # If that fails, use the current time
-            timestamp = datetime.now()
+        # Parse the timestamp. Persisted timestamps are naive UTC: devices
+        # report UTC (NTP), and aware values are converted before storage.
+        timestamp = None
+        ts_raw = reading.get("timestamp")
+        if isinstance(ts_raw, (int, float)) and ts_raw > 1_600_000_000:
+            # Unix epoch from the device (0 means clock not yet NTP-synced)
+            timestamp = datetime.fromtimestamp(ts_raw, tz=timezone.utc)
+        elif isinstance(ts_raw, str):
+            try:
+                timestamp = datetime.fromisoformat(ts_raw)
+            except ValueError:
+                pass
+        if timestamp is None:
+            timestamp = datetime.now(timezone.utc)
+        if timestamp.tzinfo is not None:
+            timestamp = timestamp.astimezone(timezone.utc).replace(tzinfo=None)
 
         # Format the timestamp as ISO format
         timestamp_str = timestamp.isoformat()

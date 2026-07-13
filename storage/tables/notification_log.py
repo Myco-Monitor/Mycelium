@@ -4,7 +4,7 @@ CRUD operations for notification_log table.
 Tracks notification delivery attempts and status.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any, List
 
 from storage.db_utils import get_connection
@@ -88,7 +88,9 @@ def get_failed_notifications(hours: int = 24) -> List[Dict[str, Any]]:
     Returns:
         List of failed notification records
     """
-    cutoff = (datetime.now() - timedelta(hours=hours)).isoformat()
+    cutoff = (
+        datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=hours)
+    ).isoformat()
 
     conn = get_connection()
     cursor = conn.cursor()
@@ -120,7 +122,9 @@ def get_notification_stats(hours: int = 24) -> Dict[str, int]:
     Returns:
         Dictionary with statistics
     """
-    cutoff = (datetime.now() - timedelta(hours=hours)).isoformat()
+    cutoff = (
+        datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=hours)
+    ).isoformat()
 
     conn = get_connection()
     cursor = conn.cursor()
@@ -153,7 +157,9 @@ def cleanup_old_logs(days: int = 30) -> int:
     Returns:
         Number of records deleted
     """
-    cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+    cutoff = (
+        datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=days)
+    ).isoformat()
 
     conn = get_connection()
     cursor = conn.cursor()

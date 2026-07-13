@@ -9,7 +9,7 @@ This module provides services for handling weather data, including:
 
 import logging
 from typing import Dict, List, Any, Optional
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from api.clients.weather_client import OpenWeatherMapClient
 from storage.tables.readings_weather import (
@@ -294,7 +294,9 @@ class WeatherDataService:
             Dict[str, Any]: Transformed weather data
         """
         # Extract timestamp
-        timestamp = datetime.fromtimestamp(weather_data.get("dt", 0))
+        timestamp = datetime.fromtimestamp(
+            weather_data.get("dt", 0), tz=timezone.utc
+        ).replace(tzinfo=None)
 
         # Extract main weather data
         main = weather_data.get("main", {})
@@ -361,7 +363,9 @@ class WeatherDataService:
 
         for forecast in forecasts:
             # Extract timestamp
-            timestamp = datetime.fromtimestamp(forecast.get("dt", 0))
+            timestamp = datetime.fromtimestamp(
+                forecast.get("dt", 0), tz=timezone.utc
+            ).replace(tzinfo=None)
 
             # Extract temperature data
             temp = forecast.get("temp", {})
@@ -430,7 +434,9 @@ class WeatherDataService:
         pollution_list = pollution_data.get("list", [{}])[0]
 
         # Extract timestamp
-        timestamp = datetime.fromtimestamp(pollution_list.get("dt", 0))
+        timestamp = datetime.fromtimestamp(
+            pollution_list.get("dt", 0), tz=timezone.utc
+        ).replace(tzinfo=None)
 
         # Extract air quality index
         aqi = pollution_list.get("main", {}).get("aqi")

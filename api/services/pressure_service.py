@@ -10,7 +10,7 @@ This module provides services for handling BMP581 pressure data from Hyphae devi
 
 import logging
 from typing import Dict, List, Any, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 
 from api.clients.pressure_client import PressureClient, PressureReading
 from storage.tables.device_hyphae import update_device_status, get_device_hyphae
@@ -243,10 +243,12 @@ class PressureDataService:
         Returns:
             Dict[str, Any]: Transformed reading
         """
+        # Device epoch is UTC; store naive UTC like every persisted timestamp
         if reading.timestamp:
-            timestamp = datetime.fromtimestamp(reading.timestamp)
+            timestamp = datetime.fromtimestamp(reading.timestamp, tz=timezone.utc)
         else:
-            timestamp = datetime.now()
+            timestamp = datetime.now(timezone.utc)
+        timestamp = timestamp.replace(tzinfo=None)
 
         return {
             "hyphae_id": device_id,

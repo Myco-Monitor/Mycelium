@@ -6,14 +6,14 @@ Auto-refreshes every 5 minutes (aligned with the pressure polling interval).
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Dict, Any
 
 from nicegui import ui
 
 from storage.tables.device_hyphae import get_all_device_hyphae
 from storage.tables.readings_pressure import get_latest_pressure
-from web_ui.format import fmt_time
+from web_ui.format import fmt_time, to_user_dt
 
 logger = logging.getLogger(__name__)
 
@@ -110,9 +110,13 @@ def _get_pressure_readings(devices: List[Dict[str, Any]]) -> List[Dict[str, Any]
         age = None
         if latest:
             try:
+                # reading_ts is naive UTC; age math in UTC, display in user tz
                 dt = datetime.fromisoformat(latest["reading_ts"])
-                ts = f"{fmt_time(dt)} {dt.strftime('%b %d')}"
-                age = (datetime.now() - dt).total_seconds()
+                local = to_user_dt(dt)
+                ts = f"{fmt_time(dt)} {local.strftime('%b %d')}"
+                age = (
+                    datetime.now(timezone.utc).replace(tzinfo=None) - dt
+                ).total_seconds()
             except (ValueError, TypeError):
                 ts = str(latest.get("reading_ts", ""))
 

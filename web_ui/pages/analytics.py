@@ -9,13 +9,14 @@ raw readings). No code execution.
 import csv
 import io
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import plotly.graph_objects as go
 from nicegui import ui, app
 
 from web_ui.layout import page_layout, back_to_dashboard
 from web_ui.theme import get_colors
+from web_ui.format import to_user_dt
 
 from storage.tables import (
     readings_spore,
@@ -136,13 +137,29 @@ def _to_pref_temp(celsius, pref: str):
 # -- Chart builders -----------------------------------------------------------
 
 
+def _chart_ts(value):
+    """Convert a stored (naive UTC) timestamp to a naive user-local datetime.
+
+    Plotly renders naive datetimes as-is, so charts show the user's timezone.
+    """
+    dt = to_user_dt(value)
+    return dt.replace(tzinfo=None) if dt else value
+
+
+def _utc_offset_hours() -> int:
+    """The user timezone's current whole-hour offset from UTC."""
+    dt = to_user_dt(datetime.now(timezone.utc))
+    off = dt.utcoffset() if dt else None
+    return round(off.total_seconds() / 3600) if off else 0
+
+
 def _build_env_trends_chart(readings, colors, temp_pref="C"):
     """Build a plotly time-series chart for environmental trends."""
     if not readings:
         return _empty_figure("No environmental data for selected period")
 
     temp_unit = _temp_unit(temp_pref)
-    timestamps = [r.get("timestamp", "") for r in readings]
+    timestamps = [_chart_ts(r.get("timestamp", "")) for r in readings]
     co2 = [r.get("co2") for r in readings]
     temp = [_to_pref_temp(r.get("temperature"), temp_pref) for r in readings]
     humidity = [r.get("humidity") for r in readings]
@@ -235,8 +252,14 @@ def _build_hourly_chart(hourly_data, field, title, color, value_transform=None):
     if not hourly_data:
         return _empty_figure(f"No hourly {title.lower()} data")
 
-    hours = [h.get("hour", 0) for h in hourly_data]
-    values = [h.get(field, 0) or 0 for h in hourly_data]
+    # Stored hours are UTC buckets; shift by the user timezone's current
+    # offset so "Hour of Day" reads in local time (approximate across DST).
+    offset = _utc_offset_hours()
+    shifted = sorted(
+        ((h.get("hour", 0) + offset) % 24, h.get(field, 0) or 0) for h in hourly_data
+    )
+    hours = [h for h, _v in shifted]
+    values = [v for _h, v in shifted]
     if value_transform:
         values = [value_transform(v) for v in values]
     hour_labels = [f"{h:02d}:00" for h in hours]
@@ -726,7 +749,7 @@ def _build_metric_chart(rows, metric_specs, chart_type, colors):
     if not rows or not metric_specs:
         return _empty_figure("No data for selected filters")
 
-    x = [r.get("reading_ts", "") for r in rows]
+    x = [_chart_ts(r.get("reading_ts", "")) for r in rows]
     palette = ["#ef5350", "#42a5f5", "#66bb6a", "#ffa726", "#ab47bc", "#26c6da"]
 
     # Assign each distinct unit label to an axis (y, y2, y3). Group by the

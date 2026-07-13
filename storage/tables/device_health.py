@@ -4,7 +4,7 @@ CRUD operations for device_health_log table.
 Tracks device health check results over time for monitoring and analytics.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any, List
 
 from storage.db_utils import get_connection
@@ -72,7 +72,9 @@ def get_health_history(
     Returns:
         List of health check records
     """
-    cutoff = (datetime.now() - timedelta(hours=hours)).isoformat()
+    cutoff = (
+        datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=hours)
+    ).isoformat()
 
     conn = get_connection()
     cursor = conn.cursor()
@@ -203,7 +205,9 @@ def cleanup_old_records(days: int = 7) -> int:
     Returns:
         Number of records deleted
     """
-    cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+    cutoff = (
+        datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=days)
+    ).isoformat()
 
     conn = get_connection()
     cursor = conn.cursor()

@@ -5,7 +5,7 @@ This module provides alert checking, triggering, and management functionality.
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any, List
 from dataclasses import dataclass
 
@@ -83,7 +83,10 @@ class AlertService:
         """Check for offline devices."""
         triggers = []
         duration_minutes = rule.get("threshold_duration_minutes", 5)
-        cutoff = datetime.now() - timedelta(minutes=duration_minutes)
+        # Naive UTC to match persisted timestamps
+        cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(
+            minutes=duration_minutes
+        )
         cutoff_str = cutoff.isoformat()
 
         devices = self._get_devices_for_rule(rule)
