@@ -90,13 +90,15 @@ PREVIEW_ROW_CAP = 500
 def _normalize_end_ts(end_date: str) -> str:
     """Widen a YYYY-MM-DD end bound to include the whole day.
 
-    reading_ts is a full timestamp and the table queries filter
-    `reading_ts <= end_ts`, so a bare date would exclude every reading on the
-    end date itself. Applied identically in preview, download, and delete so
-    the previewed count equals the deleted count.
+    reading_ts is a full datetime.isoformat() timestamp ("YYYY-MM-DDT...") and
+    the table queries filter `reading_ts <= end_ts` as strings, so the suffix
+    must be 'T'-separated: a bare date — or a space-separated suffix, which
+    sorts before 'T' — would exclude every reading on the end date itself.
+    Applied identically in preview, download, and delete so the previewed
+    count equals the deleted count.
     """
     if end_date and len(end_date) == 10:
-        return end_date + " 23:59:59"
+        return end_date + "T23:59:59.999999"
     return end_date
 
 

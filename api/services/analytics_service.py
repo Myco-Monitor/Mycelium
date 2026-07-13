@@ -45,6 +45,19 @@ class Insight:
     action: str
 
 
+def _end_of_day(end_date: str) -> str:
+    """Widen a bare YYYY-MM-DD end bound to include that whole day.
+
+    reading_ts is stored via datetime.isoformat() ("YYYY-MM-DDT..."). The range
+    filters compare as strings, and a bare date (or a space-separated suffix)
+    sorts BEFORE every 'T'-separated timestamp of that date — silently dropping
+    the end day from `<= ?` filters. Full timestamps pass through unchanged.
+    """
+    if end_date and len(end_date) == 10:
+        return end_date + "T23:59:59.999999"
+    return end_date
+
+
 class AnalyticsService:
     """
     Service for analyzing historical environmental and production data.
@@ -93,7 +106,7 @@ class AnalyticsService:
         LEFT JOIN grow_rooms gr ON ds.room_id = gr.room_id
         WHERE rs.reading_ts >= ? AND rs.reading_ts <= ?
         """
-        params = [start_date, end_date]
+        params = [start_date, _end_of_day(end_date)]
 
         if room_id is not None:
             query += " AND ds.room_id = ?"
@@ -141,7 +154,7 @@ class AnalyticsService:
         LEFT JOIN grow_rooms gr ON ds.room_id = gr.room_id
         WHERE rs.reading_ts >= ? AND rs.reading_ts <= ?
         """
-        params = [start_date, end_date]
+        params = [start_date, _end_of_day(end_date)]
 
         if room_id is not None:
             query += " AND ds.room_id = ?"
@@ -176,7 +189,7 @@ class AnalyticsService:
         JOIN device_spore ds ON rs.device_id = ds.device_id
         WHERE rs.reading_ts >= ? AND rs.reading_ts <= ?
         """
-        params = [start_date, end_date]
+        params = [start_date, _end_of_day(end_date)]
 
         if room_id is not None:
             query += " AND ds.room_id = ?"
@@ -267,7 +280,7 @@ class AnalyticsService:
         FROM harvest h
         WHERE h.harvest_ts >= ? AND h.harvest_ts <= ?
         """
-        params = [start_date, end_date]
+        params = [start_date, _end_of_day(end_date)]
 
         query += " ORDER BY h.harvest_ts ASC"
 
