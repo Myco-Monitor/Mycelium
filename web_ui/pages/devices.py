@@ -431,11 +431,17 @@ def refresh_hyphae_device_data(device_id, ip: str) -> Dict:
     update_device_status(device_id, 1)
     device_name = info.get("device_name")
     firmware = info.get("firmware_version")
-    if device_name or firmware:
+    # The table's Mode column reads mode_enabled from the DB row, so a refresh
+    # must sync the device's real modes too — otherwise it shows the DB default
+    # ("Offline") until the detail panel happens to fetch them.
+    modes = fetch_hyphae_config_modes(ip) or {}
+    if device_name or firmware or modes:
         update_device_hyphae(
             device_id,
             device_name=device_name or None,
             firmware_version=firmware or None,
+            mode_enabled=modes.get("enabled_mode"),
+            mode_operation=modes.get("operation_mode"),
         )
     return {"success": True, "errors": []}
 
