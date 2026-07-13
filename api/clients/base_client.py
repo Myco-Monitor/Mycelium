@@ -37,6 +37,11 @@ def create_device_ssl_context() -> ssl.SSLContext:
     ca_path = Path(_CA_CERT_PATH)
     if ca_path.exists():
         ctx.load_verify_locations(str(ca_path))
+        # Python 3.13 enables VERIFY_X509_STRICT by default, which rejects the
+        # fleet CA root (no keyUsage extension) on every device poll. The CA is
+        # baked into provisioned devices, so relax only the strict flag and keep
+        # full chain + hostname verification.
+        ctx.verify_flags &= ~ssl.VERIFY_X509_STRICT
     else:
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
@@ -254,6 +259,9 @@ class BaseApiClient:
         if ca_path.exists():
             ctx = ssl.create_default_context()
             ctx.load_verify_locations(str(ca_path))
+            # See create_device_ssl_context(): the fleet CA root predates the
+            # keyUsage extension Python 3.13's VERIFY_X509_STRICT demands.
+            ctx.verify_flags &= ~ssl.VERIFY_X509_STRICT
             self._ssl_context = ctx
             self.logger.debug(f"SSL context created with CA cert: {ca_path}")
         else:

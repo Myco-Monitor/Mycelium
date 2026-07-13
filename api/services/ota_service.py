@@ -134,18 +134,9 @@ class OtaService:
         )
 
         # Create SSL context for device communication
-        from api.clients.base_client import _CA_CERT_PATH, device_connector
-        import ssl
+        from api.clients.base_client import create_device_ssl_context, device_connector
 
-        ssl_ctx = ssl.create_default_context()
-        ca_path = Path(_CA_CERT_PATH)
-        if ca_path.exists():
-            ssl_ctx.load_verify_locations(str(ca_path))
-        else:
-            ssl_ctx.check_hostname = False
-            ssl_ctx.verify_mode = ssl.CERT_NONE
-
-        connector = device_connector(ssl_ctx)
+        connector = device_connector(create_device_ssl_context())
 
         try:
             async with aiohttp.ClientSession(connector=connector) as session:
@@ -220,18 +211,9 @@ class OtaService:
         if not base_url:
             return None
 
-        from api.clients.base_client import _CA_CERT_PATH, device_connector
-        import ssl
+        from api.clients.base_client import create_device_ssl_context, device_connector
 
-        ssl_ctx = ssl.create_default_context()
-        ca_path = Path(_CA_CERT_PATH)
-        if ca_path.exists():
-            ssl_ctx.load_verify_locations(str(ca_path))
-        else:
-            ssl_ctx.check_hostname = False
-            ssl_ctx.verify_mode = ssl.CERT_NONE
-
-        connector = device_connector(ssl_ctx)
+        connector = device_connector(create_device_ssl_context())
         try:
             async with aiohttp.ClientSession(connector=connector) as session:
                 async with session.get(

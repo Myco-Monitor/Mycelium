@@ -149,20 +149,10 @@ class ReconnectionService:
 
     async def _create_session(self):
         """Create an aiohttp session with MycoMonitor CA cert."""
-        from api.clients.base_client import _CA_CERT_PATH, device_connector
-        from pathlib import Path
-        import ssl
+        from api.clients.base_client import create_device_ssl_context, device_connector
         import aiohttp
 
-        ssl_ctx = ssl.create_default_context()
-        ca_path = Path(_CA_CERT_PATH)
-        if ca_path.exists():
-            ssl_ctx.load_verify_locations(str(ca_path))
-        else:
-            ssl_ctx.check_hostname = False
-            ssl_ctx.verify_mode = ssl.CERT_NONE
-
-        connector = device_connector(ssl_ctx)
+        connector = device_connector(create_device_ssl_context())
         return aiohttp.ClientSession(connector=connector)
 
     def _store_spore_readings(self, device_id: int, readings: list):
