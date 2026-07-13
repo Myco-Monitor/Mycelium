@@ -433,7 +433,7 @@ def refresh_hyphae_device_data(device_id, ip: str) -> Dict:
     firmware = info.get("firmware_version")
     # The table's Mode column reads mode_enabled from the DB row, so a refresh
     # must sync the device's real modes too — otherwise it shows the DB default
-    # ("Offline") until the detail panel happens to fetch them.
+    # ("Off") until the detail panel happens to fetch them.
     modes = fetch_hyphae_config_modes(ip) or {}
     if device_name or firmware or modes:
         update_device_hyphae(
@@ -718,7 +718,9 @@ def _spore_header_cells(device: Dict):
 
 def _hyphae_header_cells(device: Dict):
     """Summary columns for a Hyphae row (order must match _HYPHAE_GRID)."""
-    mode_map = {0: "Offline", 1: "Testing", 2: "Running"}
+    # 0 is the device's "Off" enabled-mode — not connectivity; that's the
+    # separate Status column / online badge.
+    mode_map = {0: "Off", 1: "Testing", 2: "Running"}
     ui.label(device.get("device_name") or "—").classes("text-weight-medium ellipsis")
     ui.label(device.get("hostname") or "—").classes("text-caption ellipsis")
     ui.label(device.get("room_name") or "Unassigned").classes("text-caption ellipsis")
@@ -1551,7 +1553,9 @@ def _spore_diagnostics_body(device: Dict, state: Dict):
 
 def _render_hyphae_detail(device: Dict, colors: dict, selected_device: Dict = None):
     """Render the full detail panel for a Hyphae device."""
-    mode_map = {0: "Offline", 1: "Testing", 2: "Running"}
+    # 0 is the device's "Off" enabled-mode — not connectivity; that's the
+    # separate Status column / online badge.
+    mode_map = {0: "Off", 1: "Testing", 2: "Running"}
     op_map = {0: "Schedule", 1: "Dynamic"}
 
     # Each data panel registers (state, fetch_fn, body) here so the single
@@ -1804,7 +1808,9 @@ def _hyphae_relay_state_view(device: Dict, live: Optional[Dict]) -> Dict:
     from relay_settings, and the modes from the device row — so it needs no
     device call.
     """
-    mode_map = {0: "Offline", 1: "Testing", 2: "Running"}
+    # 0 is the device's "Off" enabled-mode — not connectivity; that's the
+    # separate Status column / online badge.
+    mode_map = {0: "Off", 1: "Testing", 2: "Running"}
     op_map = {0: "Schedule", 1: "Dynamic"}
 
     # Relay names always come from stored relay_settings so the live state (which
