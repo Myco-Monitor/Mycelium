@@ -43,6 +43,8 @@ CREATE TABLE IF NOT EXISTS device_hyphae (
     mac_address TEXT UNIQUE NOT NULL,
     mode_enabled INTEGER NOT NULL DEFAULT 0,
     mode_operation INTEGER NOT NULL DEFAULT 0,
+    error_group INTEGER NOT NULL DEFAULT 0,
+    error_code INTEGER NOT NULL DEFAULT 0,
     firmware_version TEXT,
     is_online INTEGER DEFAULT 0,
     last_update TEXT,

@@ -179,9 +179,53 @@ class HyphaeDataService:
             "relay_states": [1 if s else 0 for s in states],
         }
 
+        # Record relay-control mode + latched-error state from the same response
+        # so the periodic poll (not only a manual refresh) reflects a Hyphae that
+        # has halted relay control. Never let a bookkeeping write break the poll's
+        # core job (storing relay states + owning connectivity/backoff).
+        self._record_relay_mode(device_id, state)
+
         # Transform and store the reading
         stored_reading = await self.store_reading(device_id, reading)
         return stored_reading
+
+    def _record_relay_mode(self, device_id: int, state: Dict[str, Any]) -> None:
+        """
+        Persist enabled mode + latched-error fields from an /api/relay/state
+        response onto device_hyphae, when they have changed.
+
+        enabledMode: 0 Off / 1 Testing / 2 Running / 3 Error. errGrp/errCode are
+        0 unless mode 3; older firmware omits them (hence the .get defaults).
+        """
+        if not isinstance(state, dict) or "enabledMode" not in state:
+            return
+        try:
+            mode = int(state.get("enabledMode", 0))
+            err_grp = int(state.get("errGrp", 0))
+            err_code = int(state.get("errCode", 0))
+            device = get_device_hyphae(device_id)
+            if device is None:
+                return
+            if (
+                device.get("mode_enabled") != mode
+                or device.get("error_group") != err_grp
+                or device.get("error_code") != err_code
+            ):
+                update_device_hyphae(
+                    device_id,
+                    mode_enabled=mode,
+                    error_group=err_grp,
+                    error_code=err_code,
+                )
+                if mode == 3:
+                    self.logger.warning(
+                        f"Hyphae device {device_id} reported ERROR mode "
+                        f"(group bitmask {err_grp}, code {err_code})"
+                    )
+        except (ValueError, TypeError, KeyError) as e:
+            self.logger.warning(
+                f"Could not record relay mode for device {device_id}: {e}"
+            )
 
     async def refresh_firmware_version(self, device_id: int) -> Optional[str]:
         """

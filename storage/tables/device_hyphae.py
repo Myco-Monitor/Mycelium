@@ -150,6 +150,8 @@ def update_device_hyphae(
     firmware_version: Optional[str] = None,
     mode_enabled: Optional[int] = None,
     mode_operation: Optional[int] = None,
+    error_group: Optional[int] = None,
+    error_code: Optional[int] = None,
 ) -> int:
     """
     Update a device_hyphae record.
@@ -159,8 +161,12 @@ def update_device_hyphae(
         device_name (str, optional): New name for the device
         hostname (str, optional): New IP address for the device
         firmware_version (str, optional): New firmware version for the device
-        mode_enabled (int, optional): New mode enabled status (0=disabled, 1=enabled)
+        mode_enabled (int, optional): New mode enabled status (0=Off, 1=Testing,
+            2=Running, 3=Error)
         mode_operation (int, optional): New operation mode
+        error_group (int, optional): Culprit group bitmask when in error mode
+            (bit0=CO2, bit1=Humidity, bit2=Temp; 0=none)
+        error_code (int, optional): Error reason code when in error mode
 
     Returns:
         int: Number of rows affected (should be 1 if successful)
@@ -188,6 +194,14 @@ def update_device_hyphae(
     if mode_operation is not None:
         update_fields.append("mode_operation = ?")
         params.append(mode_operation)
+
+    if error_group is not None:
+        update_fields.append("error_group = ?")
+        params.append(error_group)
+
+    if error_code is not None:
+        update_fields.append("error_code = ?")
+        params.append(error_code)
 
     # Add updated_at timestamp
     update_fields.append("updated_at = ?")

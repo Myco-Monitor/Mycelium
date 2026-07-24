@@ -75,6 +75,55 @@ def initialize_database(db_path, force=False):
         return False
 
 
+def _column_exists(conn, table, column):
+    """True if `column` is present on `table`.
+
+    The table name is interpolated because SQLite cannot bind identifiers in
+    PRAGMA/DDL; it is never user input — only the trusted constants in
+    _COLUMN_ADDITIONS reach here.
+    """
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    return any(r[1] == column for r in rows)
+
+
+# Columns added to the schema after the initial release. New databases already
+# have them (from create_unified_database.sql); this list brings older installs
+# up to date on startup, since the project has no migration framework.
+_COLUMN_ADDITIONS = [
+    ("device_hyphae", "error_group", "INTEGER NOT NULL DEFAULT 0"),
+    ("device_hyphae", "error_code", "INTEGER NOT NULL DEFAULT 0"),
+]
+
+
+def apply_migrations(db_path):
+    """
+    Idempotently bring an existing database up to the current schema.
+
+    Only adds columns that are missing, so it is safe to run on every startup
+    and on a freshly created database (where it is a no-op).
+
+    Returns:
+        bool: True on success, False if the database could not be opened/altered.
+    """
+    try:
+        conn = sqlite3.connect(db_path)
+    except sqlite3.Error as e:
+        print(f"Error opening database for migration: {e}")
+        return False
+    try:
+        for table, column, decl in _COLUMN_ADDITIONS:
+            if not _column_exists(conn, table, column):
+                print(f"Adding missing column {table}.{column}")
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+        conn.commit()
+        return True
+    except sqlite3.Error as e:
+        print(f"Error applying migrations: {e}")
+        return False
+    finally:
+        conn.close()
+
+
 def main():
     """Main function to parse arguments and initialize database."""
     parser = argparse.ArgumentParser(description="Initialize Mycelium database")

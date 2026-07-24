@@ -130,6 +130,34 @@ def _parse_hyphae_schedule_html(html_text: Optional[str]) -> Optional[Dict]:
 _ENABLED_MODE_TO_INT = {"off": 0, "testing": 1, "running": 2}
 _OPERATION_MODE_TO_INT = {"schedule": 0, "dynamic": 1}
 
+# Latched-error reason codes reported by the Hyphae (err_code on /api/relay/state).
+# Mirrors RelayErrorCode in the firmware.
+_HYPHAE_ERROR_REASONS = {
+    1: "CO₂ uncontrollable after exhausting drift corrections — check the exhaust fan.",
+    2: "Could not auto-correct CO₂ drift: no calibration PIN set for a Spore.",
+    3: "Humidity never reached target — check the humidifier.",
+    4: "Temperature never reached target — check the heater.",
+}
+
+
+def _hyphae_error_groups(error_group: int) -> str:
+    """Human list of culprit groups from the err_grp bitmask (bit0=CO2, 1=Hum, 2=Temp)."""
+    names = []
+    if error_group & 0x01:
+        names.append("CO₂")
+    if error_group & 0x02:
+        names.append("Humidity")
+    if error_group & 0x04:
+        names.append("Temperature")
+    return ", ".join(names) if names else "unknown"
+
+
+def _hyphae_error_reason(error_code: Optional[int]) -> str:
+    """Human reason string for a Hyphae latched-error code."""
+    return _HYPHAE_ERROR_REASONS.get(
+        error_code or 0, "Relay control halted by the max-on-time safety."
+    )
+
 
 def _config_mode_value(html_text: str, label: str) -> Optional[str]:
     """Return the value text shown next to a config-page label (e.g. 'Testing')."""
@@ -148,6 +176,10 @@ def _parse_hyphae_config_modes(html_text: Optional[str]) -> Optional[Dict]:
     enabled = _config_mode_value(html_text, "Enabled Mode")
     operation = _config_mode_value(html_text, "Operation Mode")
     e = _ENABLED_MODE_TO_INT.get((enabled or "").lower())
+    # The config page shows "ERROR — relay control halted" for the latched fault
+    # (mode 3); match the prefix rather than the full sentence.
+    if e is None and (enabled or "").lower().startswith("error"):
+        e = 3
     o = _OPERATION_MODE_TO_INT.get((operation or "").lower())
     if e is None and o is None:
         return None
@@ -719,8 +751,9 @@ def _spore_header_cells(device: Dict):
 def _hyphae_header_cells(device: Dict):
     """Summary columns for a Hyphae row (order must match _HYPHAE_GRID)."""
     # 0 is the device's "Off" enabled-mode — not connectivity; that's the
-    # separate Status column / online badge.
-    mode_map = {0: "Off", 1: "Testing", 2: "Running"}
+    # separate Status column / online badge. 3 is a latched fault (relay control
+    # halted by the max-on-time safety) and needs an operator to clear it.
+    mode_map = {0: "Off", 1: "Testing", 2: "Running", 3: "ERROR"}
     ui.label(device.get("device_name") or "—").classes("text-weight-medium ellipsis")
     ui.label(device.get("hostname") or "—").classes("text-caption ellipsis")
     ui.label(device.get("room_name") or "Unassigned").classes("text-caption ellipsis")
@@ -730,6 +763,8 @@ def _hyphae_header_cells(device: Dict):
         if mode_text == "Running"
         else "orange"
         if mode_text == "Testing"
+        else "red"
+        if mode_text == "ERROR"
         else "grey"
     )
     ui.badge(mode_text, color=mode_color)
@@ -742,6 +777,47 @@ def _hyphae_header_cells(device: Dict):
 # ---------------------------------------------------------------------------
 # SPORE panel
 # ---------------------------------------------------------------------------
+
+
+def _render_spore_pin_warning(devices: List[Dict]) -> None:
+    """Proactive banner listing Spores with no calibration PIN available.
+
+    A Spore with neither a stored per-device PIN nor a default reset PIN
+    (get_pin_status == "missing") cannot receive a calibration push from
+    Mycelium or the Hyphae drift-correction, so surface it before the operator
+    has to dig into a device's Management tab.
+    """
+    user_id = app.storage.user.get("user_id")
+    if not user_id:
+        return
+    from api.services.ota_service import OtaService
+
+    ota_svc = OtaService()
+    missing = []
+    for d in devices:
+        did = d.get("device_id")
+        if did is None:
+            continue
+        try:
+            if ota_svc.get_pin_status(did, "spore", user_id) == "missing":
+                missing.append(d.get("device_name") or d.get("hostname") or f"#{did}")
+        except Exception:
+            continue
+    if not missing:
+        return
+    with ui.card().classes("w-full bg-orange-1 q-pa-sm q-mb-sm"):
+        with ui.row().classes("items-center gap-2 no-wrap"):
+            ui.icon("key_off", color="orange").classes("text-h6")
+            with ui.column().classes("gap-0"):
+                ui.label(
+                    f"{len(missing)} Spore(s) have no calibration PIN set"
+                ).classes("text-weight-bold text-orange-10")
+                ui.label(
+                    "Calibration can't be pushed to: "
+                    + ", ".join(missing)
+                    + ". Set a PIN in each device's Management tab, or a default "
+                    "PIN in Settings."
+                ).classes("text-caption text-orange-10")
 
 
 def _build_spore_panel(colors, selected_device, stat_cards):
@@ -761,6 +837,8 @@ def _build_spore_panel(colors, selected_device, stat_cards):
                 "text-muted q-pa-md"
             )
             return
+
+        _render_spore_pin_warning(devices)
 
         _device_list_header(
             ["Name", "Hostname", "Room", "Status", "Last Seen"], _SPORE_GRID
@@ -1555,7 +1633,7 @@ def _render_hyphae_detail(device: Dict, colors: dict, selected_device: Dict = No
     """Render the full detail panel for a Hyphae device."""
     # 0 is the device's "Off" enabled-mode — not connectivity; that's the
     # separate Status column / online badge.
-    mode_map = {0: "Off", 1: "Testing", 2: "Running"}
+    mode_map = {0: "Off", 1: "Testing", 2: "Running", 3: "ERROR"}
     op_map = {0: "Schedule", 1: "Dynamic"}
 
     # Each data panel registers (state, fetch_fn, body) here so the single
@@ -1611,11 +1689,35 @@ def _render_hyphae_detail(device: Dict, colors: dict, selected_device: Dict = No
             if mode_text == "Running"
             else "orange"
             if mode_text == "Testing"
+            else "red"
+            if mode_text == "ERROR"
             else "grey"
         )
         ui.badge(mode_text, color=mode_color)
         op_text = op_map.get(device.get("mode_operation", 0), "Unknown")
         ui.badge(op_text, color="blue")
+
+    @ui.refreshable
+    def error_banner():
+        # Only shown when the controller has latched into error mode (relay
+        # control halted). Names the culprit group + reason so the operator knows
+        # what to fix; recovery is done on the device (set mode Off/Testing/Running).
+        if device.get("mode_enabled") != 3:
+            return
+        groups = _hyphae_error_groups(device.get("error_group", 0) or 0)
+        reason = _hyphae_error_reason(device.get("error_code", 0))
+        with ui.card().classes("w-full bg-red-1 q-pa-sm"):
+            with ui.row().classes("items-center gap-2 no-wrap"):
+                ui.icon("error", color="red").classes("text-h6")
+                with ui.column().classes("gap-0"):
+                    ui.label(f"Relay control halted — {groups}").classes(
+                        "text-weight-bold text-red-10"
+                    )
+                    ui.label(reason).classes("text-caption text-red-10")
+                    ui.label(
+                        "Clear it on the controller: set Enabled Mode back to "
+                        "Off/Testing/Running once the issue is resolved."
+                    ).classes("text-caption text-grey-8")
 
     def _fetch_modes():
         # Enabled/Operation mode aren't exposed as JSON, so read them from the
@@ -1645,6 +1747,10 @@ def _render_hyphae_detail(device: Dict, colors: dict, selected_device: Dict = No
         ui.button(
             "Refresh from device", icon="cloud_download", on_click=_refresh_all
         ).props("outline dense")
+
+    # Latched-error banner (only visible in error mode). Renders from the device
+    # row, which the poller keeps current; re-open the row to refresh it.
+    error_banner()
 
     with ui.tabs().classes("w-full") as dtabs:
         tab_sys = ui.tab("System Info", icon="info")
@@ -1810,7 +1916,7 @@ def _hyphae_relay_state_view(device: Dict, live: Optional[Dict]) -> Dict:
     """
     # 0 is the device's "Off" enabled-mode — not connectivity; that's the
     # separate Status column / online badge.
-    mode_map = {0: "Off", 1: "Testing", 2: "Running"}
+    mode_map = {0: "Off", 1: "Testing", 2: "Running", 3: "ERROR"}
     op_map = {0: "Schedule", 1: "Dynamic"}
 
     # Relay names always come from stored relay_settings so the live state (which

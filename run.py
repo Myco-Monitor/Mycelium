@@ -125,6 +125,15 @@ def check_prerequisites():
             return False
         print(f"  Database initialized at {db_path}")
 
+    # Bring an existing database up to the current schema (idempotent; a no-op on
+    # a freshly created DB). There is no migration framework, so any columns added
+    # after the initial release are applied here on startup.
+    from storage.initialize_database import apply_migrations
+
+    if not apply_migrations(str(db_path)):
+        print("  Database migration failed!")
+        return False
+
     # Check required modules
     required = ["nicegui", "plotly", "pandas"]
 

@@ -17,6 +17,28 @@ from storage.tables import readings_spore
 logger = logging.getLogger("services.AlertService")
 
 
+# Hyphae latched-error reason codes (err_code reported on /api/relay/state).
+# Mirrors RelayErrorCode in the firmware.
+_HYPHAE_ERROR_REASONS = {
+    1: "CO2 uncontrollable after exhausting drift corrections — check the exhaust fan.",
+    2: "Could not auto-correct CO2 drift: no calibration PIN set for a Spore.",
+    3: "Humidity never reached target — check the humidifier.",
+    4: "Temperature never reached target — check the heater.",
+}
+
+
+def _hyphae_error_groups(error_group: int) -> str:
+    """Human list of culprit groups from the err_grp bitmask (bit0=CO2, 1=Hum, 2=Temp)."""
+    names = []
+    if error_group & 0x01:
+        names.append("CO2")
+    if error_group & 0x02:
+        names.append("Humidity")
+    if error_group & 0x04:
+        names.append("Temperature")
+    return ", ".join(names) if names else "unknown"
+
+
 @dataclass
 class AlertTrigger:
     """Represents a triggered alert."""
@@ -231,10 +253,53 @@ class AlertService:
         return triggers
 
     def _check_error_rule(self, rule: Dict[str, Any]) -> List[AlertTrigger]:
-        """Check for device errors."""
-        # This would check for sensor errors reported by devices
-        # Implementation depends on how devices report errors
-        return []
+        """Raise an alert when a Hyphae controller has latched into error mode
+        (relay control halted by the max-on-time safety). Only Hyphae devices
+        carry this state; the reason comes from the mode/error fields the poller
+        stored from /api/relay/state."""
+        triggers = []
+        devices = self._get_devices_for_rule(rule)
+        hyphae_devices = [d for d in devices if d.get("device_type") == "hyphae"]
+
+        for device in hyphae_devices:
+            if device.get("mode_enabled") == 3:
+                if not alert_history.has_active_alert(
+                    rule["rule_id"], device["device_id"]
+                ):
+                    groups = _hyphae_error_groups(device.get("error_group", 0) or 0)
+                    reason = _HYPHAE_ERROR_REASONS.get(
+                        device.get("error_code", 0) or 0,
+                        "Relay control halted by the max-on-time safety.",
+                    )
+                    message = (
+                        f"{device['device_name']} halted relay control "
+                        f"({groups}): {reason}"
+                    )
+                    alert_history.create_alert(
+                        rule_id=rule["rule_id"],
+                        device_id=device["device_id"],
+                        device_type="hyphae",
+                        alert_message=message,
+                    )
+                    triggers.append(
+                        AlertTrigger(
+                            rule_id=rule["rule_id"],
+                            rule_name=rule["rule_name"],
+                            rule_type="error",
+                            device_id=device["device_id"],
+                            device_type="hyphae",
+                            device_name=device["device_name"],
+                            message=message,
+                        )
+                    )
+                    self.logger.info(f"Alert triggered: {message}")
+            else:
+                # Recovered (operator set the mode back to 0/1/2) — clear it.
+                alert_history.auto_resolve_for_rule_device(
+                    rule["rule_id"], device["device_id"]
+                )
+
+        return triggers
 
     def _get_devices_for_rule(self, rule: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
