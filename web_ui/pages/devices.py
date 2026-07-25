@@ -782,14 +782,10 @@ def _hyphae_header_cells(device: Dict):
 def _render_spore_pin_warning(devices: List[Dict]) -> None:
     """Proactive banner listing Spores with no calibration PIN available.
 
-    A Spore with neither a stored per-device PIN nor a default reset PIN
-    (get_pin_status == "missing") cannot receive a calibration push from
-    Mycelium or the Hyphae drift-correction, so surface it before the operator
-    has to dig into a device's Management tab.
+    A Spore with no stored per-device PIN (get_pin_status == "missing") cannot
+    receive a calibration push from Mycelium or the Hyphae drift-correction,
+    so surface it before the operator has to dig into a device's Management tab.
     """
-    user_id = app.storage.user.get("user_id")
-    if not user_id:
-        return
     from api.services.ota_service import OtaService
 
     ota_svc = OtaService()
@@ -799,7 +795,7 @@ def _render_spore_pin_warning(devices: List[Dict]) -> None:
         if did is None:
             continue
         try:
-            if ota_svc.get_pin_status(did, "spore", user_id) == "missing":
+            if ota_svc.get_pin_status(did, "spore") == "missing":
                 missing.append(d.get("device_name") or d.get("hostname") or f"#{did}")
         except Exception:
             continue
@@ -815,8 +811,7 @@ def _render_spore_pin_warning(devices: List[Dict]) -> None:
                 ui.label(
                     "Calibration can't be pushed to: "
                     + ", ".join(missing)
-                    + ". Set a PIN in each device's Management tab, or a default "
-                    "PIN in Settings."
+                    + ". Set a PIN in each device's Management tab."
                 ).classes("text-caption text-orange-10")
 
 
@@ -2137,7 +2132,6 @@ def _device_management_panel(
 ):
     """PIN management, OTA firmware update, and device removal for a single device."""
     device_id = device.get("device_id")
-    user_id = app.storage.user.get("user_id")
 
     from api.services.ota_service import OtaService
 
@@ -2152,11 +2146,10 @@ def _device_management_panel(
     with ui.card().classes("w-full p-4 q-mb-md"):
         ui.label("Device PIN").classes("text-h6 q-mb-sm")
 
-        pin_status = ota_svc.get_pin_status(device_id, device_type, user_id)
+        pin_status = ota_svc.get_pin_status(device_id, device_type)
         status_map = {
             "device": ("Per-device PIN stored", "positive"),
-            "default": ("Using default PIN from Settings", "info"),
-            "missing": ("No PIN configured", "negative"),
+            "missing": ("No PIN configured — set one below", "negative"),
         }
         status_text, status_type = status_map.get(pin_status, ("Unknown", "grey"))
 
@@ -2164,9 +2157,9 @@ def _device_management_panel(
             ui.icon("vpn_key", size="sm").style(f"color: {colors['primary']}")
             ui.label(f"Status: {status_text}").classes("text-caption")
 
-        ui.label(
-            "Set a 5-digit PIN specific to this device (overrides default):"
-        ).classes("text-caption text-muted q-mb-xs")
+        ui.label("Set a 5-digit PIN specific to this device:").classes(
+            "text-caption text-muted q-mb-xs"
+        )
 
         with ui.row().classes("items-end gap-2"):
             pin_input = (
@@ -2197,7 +2190,8 @@ def _device_management_panel(
                 def clear_pin():
                     delete_device_pin(device_id, device_type)
                     ui.notify(
-                        "Device PIN cleared — will fall back to default", type="info"
+                        "Device PIN cleared — device operations will require a new PIN",
+                        type="info",
                     )
 
                 ui.button("Clear", icon="delete", on_click=clear_pin).props(
@@ -2205,7 +2199,7 @@ def _device_management_panel(
                 )
 
     # --- Firmware Update (OTA) ---
-    _device_ota_card(device, device_type, user_id, ota_svc)
+    _device_ota_card(device, device_type, ota_svc)
 
     # --- Remove Device Section ---
     with ui.card().classes("w-full p-4 q-mb-md").style("border: 1px solid #c10015"):
@@ -2252,17 +2246,18 @@ def _device_management_panel(
         ).props("color=negative outline")
 
 
-def _device_ota_card(device: Dict, device_type: str, user_id, ota_svc):
+def _device_ota_card(device: Dict, device_type: str, ota_svc):
     """Firmware Update (OTA) card for the device management panel."""
     device_id = device.get("device_id")
     with ui.card().classes("w-full p-4 q-mb-md"):
         ui.label("Firmware Update (OTA)").classes("text-h6 q-mb-sm")
 
         # Check PIN availability
-        pin = ota_svc.resolve_pin(device_id, device_type, user_id)
+        pin = ota_svc.resolve_pin(device_id, device_type)
         if not pin:
             ui.label(
-                "A device PIN is required for OTA updates. Set one above or configure a default in Settings."
+                "A device PIN is required for OTA updates. "
+                "Set one in the Device PIN card above."
             ).classes("text-negative q-mb-md")
 
         # Firmware selector
@@ -2302,7 +2297,8 @@ def _device_ota_card(device: Dict, device_type: str, user_id, ota_svc):
                 return
             if not pin:
                 ui.notify(
-                    "No PIN available. Set a device PIN or default PIN first.",
+                    "A device PIN is required for OTA updates. "
+                    "Set one in the Device PIN card above.",
                     type="negative",
                 )
                 return
@@ -2327,7 +2323,6 @@ def _device_ota_card(device: Dict, device_type: str, user_id, ota_svc):
                 device_id,
                 device_type,
                 firmware_path,
-                user_id=user_id,
                 on_progress=on_progress,
             )
 

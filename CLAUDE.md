@@ -136,9 +136,9 @@ def my_page():
 - Login/signup in `web_ui/auth.py`
 
 **PIN management:**
-- Two-tier: per-device PIN in `device_pins` table, fallback to user's default PIN in `user_settings`
-- `device_pins.py` uses Fernet encryption with key in `data/.pin_key`
-- OTA service resolves PIN via `_resolve_pin(device_id, device_type, user_id)`
+- Device operations use per-device PINs only (`device_pins` table); `user_settings.reset_pin` is the Mycelium PIN for confirming sensitive hub actions (e.g. hub updates) and is never sent to devices
+- Both are Fernet-encrypted with the key in `data/.pin_key`
+- OTA service resolves PIN via `resolve_pin(device_id, device_type)` — no PIN means the operation fails with a prompt to set one on the Devices page
 
 ### Package naming
 The NiceGUI UI package is `web_ui/` (not `ui/`) because `ui` conflicts with `from nicegui import ui`.

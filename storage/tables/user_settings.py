@@ -22,7 +22,7 @@ from storage.db_utils import (
 # Columns stored encrypted at rest (Fernet via storage.crypto). Encrypted
 # transparently on write and decrypted on read, so callers see plaintext.
 # user_password is intentionally excluded -- it is a one-way salted hash.
-_ENCRYPTED_FIELDS = ("smtp_password", "owm_api_key")
+_ENCRYPTED_FIELDS = ("smtp_password", "owm_api_key", "reset_pin")
 
 
 def _decrypt_row(row: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -83,7 +83,7 @@ def create_user_setting(
             timezone_name,
             time_format,
             temp_pref,
-            reset_pin,
+            crypto.encrypt(reset_pin),
             farm_id,
             user_role,
         ),
@@ -204,7 +204,7 @@ def update_user_setting(
 
     if reset_pin is not None:
         set_clause.append("reset_pin = ?")
-        params.append(reset_pin)
+        params.append(crypto.encrypt(reset_pin))
 
     if farm_id is not None:
         set_clause.append("farm_id = ?")

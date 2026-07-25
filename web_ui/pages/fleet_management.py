@@ -170,7 +170,6 @@ def _batch_ota_section(colors: dict):
     from storage.tables.firmware_versions import get_all_firmware_versions
     from api.services.ota_service import OtaService
 
-    user_id = app.storage.user.get("user_id")
     ota_svc = OtaService()
 
     # Step 1: Select device type and firmware
@@ -257,10 +256,9 @@ def _batch_ota_section(colors: dict):
             rows = []
             for d in devices:
                 did = d["device_id"]
-                ps = ota_svc.get_pin_status(did, dt, user_id)
+                ps = ota_svc.get_pin_status(did, dt)
                 ps_label = {
                     "device": "Device PIN",
-                    "default": "Default",
                     "missing": "MISSING",
                 }[ps]
                 rows.append(
@@ -288,7 +286,7 @@ def _batch_ota_section(colors: dict):
                     "body-cell-pin_status",
                     r"""
                     <q-td :props="props">
-                        <q-badge :color="props.row.pin_status === 'MISSING' ? 'red' : props.row.pin_status === 'Device PIN' ? 'green' : 'blue'">
+                        <q-badge :color="props.row.pin_status === 'MISSING' ? 'red' : 'green'">
                             {{ props.row.pin_status }}
                         </q-badge>
                     </q-td>
@@ -352,7 +350,7 @@ def _batch_ota_section(colors: dict):
             for i, row in enumerate(selected):
                 did = row["device_id"]
                 dname = row.get("name", f"#{did}")
-                pin = ota_svc.resolve_pin(did, dt, user_id)
+                pin = ota_svc.resolve_pin(did, dt)
 
                 batch_progress.value = i / total
 
@@ -360,9 +358,10 @@ def _batch_ota_section(colors: dict):
                     with batch_log:
                         with ui.row().classes("items-center gap-2"):
                             ui.badge("SKIP", color="orange")
-                            ui.label(f"{dname} — no PIN available").classes(
-                                "text-caption"
-                            )
+                            ui.label(
+                                f"{dname} — no device PIN set (set one on the "
+                                "Devices page)"
+                            ).classes("text-caption")
                     continue
 
                 with batch_log:
@@ -372,7 +371,6 @@ def _batch_ota_section(colors: dict):
                     did,
                     dt,
                     fw["file_path"],
-                    user_id=user_id,
                 )
 
                 with batch_log:
@@ -408,7 +406,6 @@ def _device_versions_section(colors: dict):
     from storage.tables.device_hyphae import get_all_device_hyphae
     from api.services.ota_service import OtaService
 
-    user_id = app.storage.user.get("user_id")
     ota_svc = OtaService()
 
     spores = get_all_device_spore()
@@ -425,7 +422,7 @@ def _device_versions_section(colors: dict):
 
     rows = []
     for d in spores:
-        ps = ota_svc.get_pin_status(d["device_id"], "spore", user_id)
+        ps = ota_svc.get_pin_status(d["device_id"], "spore")
         rows.append(
             {
                 "id": f"spore-{d['device_id']}",
@@ -433,16 +430,12 @@ def _device_versions_section(colors: dict):
                 "name": d.get("device_name", ""),
                 "ip": d.get("hostname", ""),
                 "firmware": d.get("firmware_version", "Unknown"),
-                "pin_status": {
-                    "device": "Device",
-                    "default": "Default",
-                    "missing": "MISSING",
-                }[ps],
+                "pin_status": {"device": "Device", "missing": "MISSING"}[ps],
                 "online": "Yes" if d.get("is_online") else "No",
             }
         )
     for d in hyphae:
-        ps = ota_svc.get_pin_status(d["device_id"], "hyphae", user_id)
+        ps = ota_svc.get_pin_status(d["device_id"], "hyphae")
         rows.append(
             {
                 "id": f"hyphae-{d['device_id']}",
@@ -450,11 +443,7 @@ def _device_versions_section(colors: dict):
                 "name": d.get("device_name", ""),
                 "ip": d.get("hostname", ""),
                 "firmware": d.get("firmware_version", "Unknown"),
-                "pin_status": {
-                    "device": "Device",
-                    "default": "Default",
-                    "missing": "MISSING",
-                }[ps],
+                "pin_status": {"device": "Device", "missing": "MISSING"}[ps],
                 "online": "Yes" if d.get("is_online") else "No",
             }
         )
@@ -470,7 +459,7 @@ def _device_versions_section(colors: dict):
         "body-cell-pin",
         r"""
         <q-td :props="props">
-            <q-badge :color="props.row.pin_status === 'MISSING' ? 'red' : props.row.pin_status === 'Device' ? 'green' : 'blue'">
+            <q-badge :color="props.row.pin_status === 'MISSING' ? 'red' : 'green'">
                 {{ props.row.pin_status }}
             </q-badge>
         </q-td>

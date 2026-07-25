@@ -21,7 +21,7 @@ The Settings page in the Mycelium project is designed to allow users to manage t
   - **timezone_name:** Dropdown allowing selection among standard US timezones.
   - **time_format:** Radio buttons to choose between 12-hour and 24-hour formats.
   - **temp_pref:** Radio buttons for Celsius or Fahrenheit preferences.
-  - **reset_pin:** Password input with a confirmation field for reliability.
+  - **reset_pin:** Mycelium PIN (confirms sensitive hub actions) — masked password input with a confirmation field.
 
 - **UX Features:**
   - Auto-save functionality ensuring immediate update.

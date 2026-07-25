@@ -45,54 +45,27 @@ class OtaService:
 
         return f"https://{ip}"
 
-    def resolve_pin(
-        self, device_id: int, device_type: str, user_id: int = None
-    ) -> Optional[str]:
+    def resolve_pin(self, device_id: int, device_type: str) -> Optional[str]:
         """
-        Two-tier PIN lookup:
-        1. Per-device PIN from device_pins table (highest priority)
-        2. Default PIN from user_settings (fallback)
-        Returns None if no PIN is available.
+        Return the device's stored PIN from the device_pins table, or None.
+
+        Device operations use per-device PINs only (set on the Devices page);
+        the Mycelium PIN in Settings is never sent to devices.
         """
-        # Tier 1: per-device PIN
         if has_stored_pin(device_id, device_type):
             pin = get_device_pin(device_id, device_type)
             if pin:
                 return pin
-
-        # Tier 2: user's default PIN from settings
-        if user_id:
-            try:
-                from storage.tables.user_settings import get_user_setting
-
-                user_info = get_user_setting(user_id)
-                if user_info and user_info.get("reset_pin"):
-                    return user_info["reset_pin"]
-            except Exception:
-                pass
-
         return None
 
-    def get_pin_status(
-        self, device_id: int, device_type: str, user_id: int = None
-    ) -> str:
+    def get_pin_status(self, device_id: int, device_type: str) -> str:
         """
         Return the PIN status for a device:
         'device' — per-device PIN stored
-        'default' — using user's default PIN
         'missing' — no PIN available
         """
         if has_stored_pin(device_id, device_type):
             return "device"
-        if user_id:
-            try:
-                from storage.tables.user_settings import get_user_setting
-
-                user_info = get_user_setting(user_id)
-                if user_info and user_info.get("reset_pin"):
-                    return "default"
-            except Exception:
-                pass
         return "missing"
 
     async def upload_firmware(
@@ -100,7 +73,6 @@ class OtaService:
         device_id: int,
         device_type: str,
         firmware_path: str,
-        user_id: int = None,
         on_progress: Optional[callable] = None,
     ) -> Dict[str, Any]:
         """
@@ -110,7 +82,6 @@ class OtaService:
             device_id: Database ID of the device.
             device_type: 'spore' or 'hyphae'.
             firmware_path: Path to the firmware .bin file.
-            user_id: User ID for default PIN fallback.
             on_progress: Optional callback(percent, message).
 
         Returns:
@@ -120,7 +91,12 @@ class OtaService:
         if not base_url:
             return {"success": False, "error": "Device not found or has no IP"}
 
-        pin = self.resolve_pin(device_id, device_type, user_id)
+        pin = self.resolve_pin(device_id, device_type)
+        if not pin:
+            return {
+                "success": False,
+                "error": "No device PIN set. Set one on the Devices page.",
+            }
         firmware = Path(firmware_path)
         if not firmware.exists():
             return {
@@ -144,7 +120,7 @@ class OtaService:
                 if on_progress:
                     on_progress(0, "Starting upload...")
 
-                start_data = {"pin": pin} if pin else {}
+                start_data = {"pin": pin}
                 async with session.post(
                     f"{base_url}/api/ota/start-upload",
                     json=start_data,

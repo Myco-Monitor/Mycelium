@@ -139,7 +139,7 @@ This schema integrates the core monitoring functionality with business operation
 | timezone_name | TEXT      | Timezone name (ET,PT,CT,MT)        | -                |
 | time_format   | TEXT      | Time format (12 or 24)             | -                |
 | temp_pref     | TEXT      | Temperature preference (C or F)    | -                |
-| reset_pin     | TEXT      | Reset PIN (hashed)                 | -                |
+| reset_pin     | TEXT      | Mycelium confirmation PIN (Fernet-encrypted at rest) | - |
 | farm_id       | INTEGER   | Reference to farms.farm_id         | FK               |
 | created_at    | TEXT      | Creation timestamp                 | DEFAULT CURRENT_TIMESTAMP |
 | updated_at    | TEXT      | Last update timestamp              | DEFAULT CURRENT_TIMESTAMP |

@@ -2,7 +2,7 @@
 Settings page for Mycelium NiceGUI application.
 
 User profile settings only: account info, weather config, preferences,
-device PIN, and email notification (SMTP) configuration.
+Mycelium PIN, hub updates, and email notification (SMTP) configuration.
 
 Farm and room management has been moved to the Farm Overview page.
 """
@@ -173,8 +173,8 @@ def user_admin_section(current_uid: int):
 
 def _hub_update_section(uid):
     """Settings card: show the current version, check for the newest release, and
-    (admin only) apply it with device-PIN confirmation. Rendered only on a managed
-    appliance — the caller gates on is_managed_appliance()."""
+    (admin only) apply it with Mycelium-PIN confirmation. Rendered only on a
+    managed appliance — the caller gates on is_managed_appliance()."""
     import hmac
 
     state = {"info": None}
@@ -304,9 +304,11 @@ def _hub_update_section(uid):
             with ui.dialog() as dlg, ui.card():
                 ui.label(f"Confirm update to {ref}").classes("text-h6")
                 ui.label(
-                    "Enter your device PIN to apply. The hub will restart."
+                    "Enter your Mycelium PIN to apply. The hub will restart."
                 ).classes("text-caption text-muted")
-                pin_in = ui.input("Device PIN").props("type=password").classes("w-full")
+                pin_in = (
+                    ui.input("Mycelium PIN").props("type=password").classes("w-full")
+                )
                 with ui.row().classes("justify-end w-full q-gutter-sm"):
                     ui.button("Cancel", on_click=lambda: dlg.submit(None)).props("flat")
                     ui.button(
@@ -318,7 +320,7 @@ def _hub_update_section(uid):
             stored = (get_user_setting(uid) or {}).get("reset_pin") or ""
             if not stored:
                 ui.notify(
-                    "Set a device PIN first (Device Verification PIN section above).",
+                    "Set a Mycelium PIN first (Mycelium PIN section above).",
                     type="negative",
                 )
                 return
@@ -505,17 +507,20 @@ def settings_page():
 
             zip_input.on("blur", _save_zip)
 
-        # ---- Section 4: Device PIN ----
+        # ---- Section 4: Mycelium PIN ----
         with ui.card().classes("w-full"):
-            ui.label("Device Verification PIN").classes("text-h5 q-mb-md")
+            ui.label("Mycelium PIN").classes("text-h5 q-mb-md")
             ui.label(
-                "PIN used for authenticated operations on Spore and Hyphae devices."
+                "Confirms sensitive Mycelium actions such as hub updates. "
+                "PINs for Spore and Hyphae devices are set per-device on the "
+                "Devices page."
             ).classes("text-muted text-caption q-mb-sm")
 
             pin_input = (
                 ui.input(
                     placeholder="Enter 4-8 digit PIN",
-                    value=user_info.get("reset_pin") or "",
+                    password=True,
+                    password_toggle_button=True,
                 )
                 .props("maxlength=8")
                 .classes("w-full")
@@ -524,10 +529,18 @@ def settings_page():
             pin_confirm = (
                 ui.input(
                     placeholder="Confirm PIN",
+                    password=True,
+                    password_toggle_button=True,
                 )
                 .props("maxlength=8")
                 .classes("w-full q-mt-sm")
             )
+
+            ui.label(
+                "A Mycelium PIN is currently set."
+                if user_info.get("reset_pin")
+                else "No PIN set yet."
+            ).classes("text-muted text-caption q-mt-sm")
 
             def _save_pin(e):
                 pin = pin_input.value.strip()
@@ -541,11 +554,15 @@ def settings_page():
                     ui.notify("PINs do not match", type="negative")
                     return
                 update_user_setting(uid, reset_pin=pin)
-                ui.notify("Device PIN saved", type="positive")
+                ui.notify("Mycelium PIN saved", type="positive")
 
             pin_confirm.on("blur", _save_pin)
 
-        # ---- Section 5: Email Notifications (SMTP) ----
+        # ---- Section 5: Hub Updates (managed appliance only) ----
+        if is_managed_appliance():
+            _hub_update_section(uid)
+
+        # ---- Section 6: Email Notifications (SMTP) ----
         with ui.card().classes("w-full"):
             ui.label("Email Notifications").classes("text-h5 q-mb-md")
             ui.label(
@@ -678,11 +695,7 @@ def settings_page():
                 "outline"
             ).classes("q-mt-xs")
 
-        # ---- Section: Hub Updates (managed appliance only) ----
-        if is_managed_appliance():
-            _hub_update_section(uid)
-
-        # ---- Section 6: User Management (admin only) ----
+        # ---- Section 7: User Management (admin only) ----
         if is_admin():
             user_admin_section(uid)
 
