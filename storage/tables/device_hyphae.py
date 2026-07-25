@@ -268,6 +268,44 @@ def set_device_online(device_id: int, is_online: int) -> int:
     return execute_update(query, (is_online, get_timestamp(), device_id))
 
 
+def update_device_diagnostics(
+    device_id: int,
+    wifi_rssi: Optional[int] = None,
+    uptime_sec: Optional[int] = None,
+) -> int:
+    """
+    Update a Hyphae's latest diagnostics snapshot (from /api/system/info).
+
+    Only fields passed as non-None are written; updated_at is deliberately left
+    untouched (diagnostics refreshes are not user edits).
+
+    Args:
+        device_id (int): ID of the Hyphae device
+        wifi_rssi (int, optional): WiFi RSSI in dBm
+        uptime_sec (int, optional): Device uptime in seconds
+
+    Returns:
+        int: Number of rows updated
+    """
+    update_fields = []
+    params: List[Any] = []
+    for column, value in (("wifi_rssi", wifi_rssi), ("uptime_sec", uptime_sec)):
+        if value is not None:
+            update_fields.append(f"{column} = ?")
+            params.append(value)
+
+    if not update_fields:
+        return 0
+
+    params.append(device_id)
+    query = f"""
+    UPDATE device_hyphae
+    SET {", ".join(update_fields)}
+    WHERE device_id = ?
+    """
+    return execute_update(query, tuple(params))
+
+
 def deactivate_device_hyphae(device_id: int, reason: Optional[str] = None) -> int:
     """
     Deactivate a device_hyphae.

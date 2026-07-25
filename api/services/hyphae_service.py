@@ -9,6 +9,7 @@ This module provides services for handling Hyphae device data, including:
 """
 
 import logging
+import re
 from typing import Dict, List, Any, Optional
 from datetime import datetime, timedelta, timezone
 
@@ -16,6 +17,7 @@ from api.clients.hyphae_client import HyphaeClient
 from storage.tables.device_hyphae import (
     update_device_status,
     update_device_hyphae,
+    update_device_diagnostics,
     get_device_hyphae,
 )
 from storage.tables.readings_hyphae import create_reading, get_latest_reading
@@ -34,6 +36,22 @@ from storage.tables.dynamic_settings import (
     update_dynamic_setting,
     get_device_dynamic_settings,
 )
+
+
+def _parse_uptime_string(uptime: Optional[str]) -> Optional[int]:
+    """Convert Hyphae's "Xd HHh MMm" uptime string to seconds.
+
+    Components may be absent; returns None if nothing parseable is found.
+    """
+    if not uptime:
+        return None
+    match = re.search(
+        r"(?:(\d+)\s*d)?\s*(?:(\d+)\s*h)?\s*(?:(\d+)\s*m)?", uptime.strip()
+    )
+    if not match or not any(match.groups()):
+        return None
+    days, hours, minutes = (int(g) if g else 0 for g in match.groups())
+    return days * 86400 + hours * 3600 + minutes * 60
 
 
 class HyphaeDataService:
@@ -257,6 +275,36 @@ class HyphaeDataService:
                 f"Recorded firmware version {version} for Hyphae device {device_id}"
             )
         return version
+
+    async def refresh_diagnostics(self, device_id: int) -> None:
+        """
+        Fetch the device's diagnostics snapshot and record it in the DB.
+
+        Reads /api/system/info and stores WiFi RSSI and uptime on the device
+        row for the health dashboard. Called by the polling service at a
+        slower cadence than readings. Never raises: failures are logged and
+        the poll cycle continues unaffected.
+
+        Args:
+            device_id (int): ID of the device
+        """
+        try:
+            client = await self.get_client(device_id)
+            info = await client.get_system_info()
+            if not isinstance(info, dict):
+                self.logger.debug(
+                    f"Hyphae device {device_id} returned no system info object"
+                )
+                return
+            update_device_diagnostics(
+                device_id,
+                wifi_rssi=info.get("rssi"),
+                uptime_sec=_parse_uptime_string(info.get("uptime")),
+            )
+        except Exception as e:
+            self.logger.warning(
+                f"Failed to refresh diagnostics for Hyphae device {device_id}: {e}"
+            )
 
     async def get_all_readings(self, device_id: int) -> List[Dict[str, Any]]:
         """

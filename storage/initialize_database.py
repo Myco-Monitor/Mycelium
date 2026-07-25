@@ -92,6 +92,12 @@ def _column_exists(conn, table, column):
 _COLUMN_ADDITIONS = [
     ("device_hyphae", "error_group", "INTEGER NOT NULL DEFAULT 0"),
     ("device_hyphae", "error_code", "INTEGER NOT NULL DEFAULT 0"),
+    ("device_hyphae", "wifi_rssi", "INTEGER"),
+    ("device_hyphae", "uptime_sec", "INTEGER"),
+    ("device_spore", "wifi_rssi", "INTEGER"),
+    ("device_spore", "heap_free_kb", "INTEGER"),
+    ("device_spore", "heap_min_free_kb", "INTEGER"),
+    ("device_spore", "uptime_sec", "INTEGER"),
 ]
 
 

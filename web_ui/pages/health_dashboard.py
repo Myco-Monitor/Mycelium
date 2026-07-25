@@ -148,14 +148,14 @@ def _device_health_card(
     metrics = metrics_data.get(key, {})
 
     # Extract metrics with fallback chain
-    uptime_24h = metrics.get("uptime_24h", health.get("uptime_pct", 0))
+    uptime_24h = metrics.get("uptime_24h", 0)
     uptime_7d = metrics.get("uptime_7d", 0)
-    avg_response = metrics.get(
-        "avg_response_time_ms", health.get("avg_response_time_ms")
-    )
-    last_check = health.get("last_check") or metrics.get("last_check")
+    avg_response = metrics.get("avg_response_24h")
+    if avg_response is None:
+        avg_response = health.get("last_response_ms")
+    last_check = health.get("last_check")
     check_count = metrics.get("check_count_24h", 0)
-    rssi = device.get("rssi") or device.get("wifi_rssi")
+    rssi = device.get("wifi_rssi")
 
     status_color = STATUS_COLORS["online"] if is_online else STATUS_COLORS["offline"]
     status_text = "Online" if is_online else "Offline"
@@ -189,6 +189,19 @@ def _device_health_card(
                 rssi_label += " (Weak)"
             _info_row("RSSI", rssi_label)
 
+        # Diagnostics snapshot (spore-only heap; hidden when not yet polled)
+        heap_free_kb = device.get("heap_free_kb")
+        if heap_free_kb is not None:
+            heap_label = f"{heap_free_kb} KB"
+            heap_min_free_kb = device.get("heap_min_free_kb")
+            if heap_min_free_kb is not None:
+                heap_label += f" (min {heap_min_free_kb} KB)"
+            _info_row("Heap Free", heap_label)
+
+        uptime_sec = device.get("uptime_sec")
+        if uptime_sec is not None:
+            _info_row("Device Uptime", _fmt_uptime(uptime_sec))
+
         ui.separator().classes("q-my-xs")
 
         # Uptime metrics
@@ -221,6 +234,18 @@ def _device_health_card(
         # Last check
         if last_check:
             _info_row("Last Check", fmt_datetime(last_check, fallback="—"))
+
+
+def _fmt_uptime(uptime_sec: int) -> str:
+    """Format device uptime seconds as 'Xd Yh Zm'."""
+    days, rem = divmod(int(uptime_sec), 86400)
+    hours, rem = divmod(rem, 3600)
+    minutes = rem // 60
+    if days:
+        return f"{days}d {hours}h {minutes}m"
+    if hours:
+        return f"{hours}h {minutes}m"
+    return f"{minutes}m"
 
 
 def _info_row(label: str, value: str):

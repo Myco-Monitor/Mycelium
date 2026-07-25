@@ -10,7 +10,6 @@ from api.services.hyphae_service import HyphaeDataService
 from api.services.weather_service import WeatherDataService
 from api.services.pressure_service import PressureDataService
 from api.services.polling_service import PollingService
-from api.services.health_service import HealthService
 from api.services.relay_service import (
     RelayService,
     RelayOperationMode,
@@ -33,7 +32,6 @@ __all__ = [
     "WeatherDataService",
     "PressureDataService",
     "PollingService",
-    "HealthService",
     "RelayService",
     "RelayOperationMode",
     "RelayState",

@@ -153,6 +153,24 @@ class SporeClient(BaseApiClient):
             self.logger.error(f"Failed to get device status: {e}")
             raise
 
+    async def get_diagnostics(self) -> Dict[str, Any]:
+        """
+        Get device diagnostics from /api/diagnostics.
+
+        Returns:
+            Dict[str, Any]: Diagnostics JSON including a "system" object
+                (uptime_sec, heap_free_kb, heap_min_free_kb, wifi_rssi_dbm),
+                sensor validity, and recent error history.
+
+        Raises:
+            ApiError: If the request fails
+        """
+        try:
+            return await self.get("/api/diagnostics", parse_json=True)
+        except ApiError as e:
+            self.logger.error(f"Failed to get device diagnostics: {e}")
+            raise
+
     async def set_ambient_pressure(self, pressure: int) -> str:
         """
         Set the ambient pressure for sensor calibration.

@@ -7,7 +7,7 @@ Tracks device health check results over time for monitoring and analytics.
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any, List
 
-from storage.db_utils import get_connection
+from storage.db_utils import get_connection, utc_now_iso
 
 
 def log_health_check(
@@ -35,15 +35,19 @@ def log_health_check(
     conn = get_connection()
     cursor = conn.cursor()
 
+    # check_time is inserted explicitly: the column's CURRENT_TIMESTAMP default
+    # uses a space separator, which sorts before the "T"-separated isoformat
+    # cutoffs used by every window query in this module.
     cursor.execute(
         """
         INSERT INTO device_health_log
-        (device_id, device_type, is_online, response_time_ms, error_message, http_status_code)
-        VALUES (?, ?, ?, ?, ?, ?)
+        (device_id, device_type, check_time, is_online, response_time_ms, error_message, http_status_code)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
     """,
         (
             device_id,
             device_type,
+            utc_now_iso(),
             1 if is_online else 0,
             response_time_ms,
             error_message,

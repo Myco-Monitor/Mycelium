@@ -309,6 +309,53 @@ def set_device_online(device_id: int, is_online: int) -> int:
     return execute_update(query, (is_online, get_timestamp(), device_id))
 
 
+def update_device_diagnostics(
+    device_id: int,
+    wifi_rssi: Optional[int] = None,
+    heap_free_kb: Optional[int] = None,
+    heap_min_free_kb: Optional[int] = None,
+    uptime_sec: Optional[int] = None,
+) -> int:
+    """
+    Update a Spore's latest diagnostics snapshot (from /api/diagnostics).
+
+    Only fields passed as non-None are written; the row's created_at marker is
+    deliberately left untouched (diagnostics refreshes are not user edits).
+
+    Args:
+        device_id (int): ID of the Spore device
+        wifi_rssi (int, optional): WiFi RSSI in dBm
+        heap_free_kb (int, optional): Current free heap in KB
+        heap_min_free_kb (int, optional): Minimum free heap since boot in KB
+        uptime_sec (int, optional): Device uptime in seconds
+
+    Returns:
+        int: Number of rows updated
+    """
+    update_fields = []
+    params: List[Any] = []
+    for column, value in (
+        ("wifi_rssi", wifi_rssi),
+        ("heap_free_kb", heap_free_kb),
+        ("heap_min_free_kb", heap_min_free_kb),
+        ("uptime_sec", uptime_sec),
+    ):
+        if value is not None:
+            update_fields.append(f"{column} = ?")
+            params.append(value)
+
+    if not update_fields:
+        return 0
+
+    params.append(device_id)
+    query = f"""
+    UPDATE device_spore
+    SET {", ".join(update_fields)}
+    WHERE device_id = ?
+    """
+    return execute_update(query, tuple(params))
+
+
 def deactivate_device_spore(device_id: int, reason: Optional[str] = None) -> int:
     """
     Deactivate a device_spore.

@@ -11,6 +11,7 @@ This module provides services for polling devices for data, including:
 import asyncio
 import logging
 import random
+import time
 from typing import Dict, Any
 from datetime import datetime, timedelta
 
@@ -32,6 +33,12 @@ from storage.tables.device_hyphae import (
     update_device_status as update_hyphae_status,
     set_device_online as set_hyphae_online,
 )
+from storage.tables.device_health import log_health_check
+
+# Refresh the diagnostics snapshot (RSSI, heap, uptime) every Nth successful
+# poll (~5 min at the default 60s interval) instead of on every poll — TLS
+# handshakes are expensive on the devices' 3-socket HTTP servers.
+DIAG_EVERY_N_POLLS = 5
 
 
 class PollingService:
@@ -254,10 +261,27 @@ class PollingService:
                         )
 
                         # Get the latest reading (raises on failure)
+                        poll_start = time.monotonic()
                         await self.spore_service.get_latest_reading(device_id)
+                        elapsed_ms = int((time.monotonic() - poll_start) * 1000)
 
                         # Update device status
-                        self._update_device_status("spore", device_id, True)
+                        self._update_device_status(
+                            "spore", device_id, True, response_time_ms=elapsed_ms
+                        )
+
+                        # Refresh the diagnostics snapshot every Nth poll, and
+                        # immediately on reconnection so a rebooted device shows
+                        # fresh uptime promptly. Never raises.
+                        status = self.device_status["spore"][device_id]
+                        polls_since_diag = status.get(
+                            "polls_since_diag", DIAG_EVERY_N_POLLS
+                        )
+                        if not was_online or polls_since_diag >= DIAG_EVERY_N_POLLS:
+                            await self.spore_service.refresh_diagnostics(device_id)
+                            status["polls_since_diag"] = 0
+                        else:
+                            status["polls_since_diag"] = polls_since_diag + 1
 
                         # On an offline->online transition, push the current ambient
                         # pressure so a reconnected Spore isn't stuck on a stale value
@@ -331,10 +355,27 @@ class PollingService:
                         )
 
                         # Get the latest reading (raises on failure)
+                        poll_start = time.monotonic()
                         await self.hyphae_service.get_latest_reading(device_id)
+                        elapsed_ms = int((time.monotonic() - poll_start) * 1000)
 
                         # Update device status
-                        self._update_device_status("hyphae", device_id, True)
+                        self._update_device_status(
+                            "hyphae", device_id, True, response_time_ms=elapsed_ms
+                        )
+
+                        # Refresh the diagnostics snapshot every Nth poll, and
+                        # immediately on reconnection so a rebooted device shows
+                        # fresh uptime promptly. Never raises.
+                        status = self.device_status["hyphae"][device_id]
+                        polls_since_diag = status.get(
+                            "polls_since_diag", DIAG_EVERY_N_POLLS
+                        )
+                        if not was_online or polls_since_diag >= DIAG_EVERY_N_POLLS:
+                            await self.hyphae_service.refresh_diagnostics(device_id)
+                            status["polls_since_diag"] = 0
+                        else:
+                            status["polls_since_diag"] = polls_since_diag + 1
 
                         # On an offline->online transition, record the running
                         # firmware version. Transitions cover startup, outage
@@ -553,7 +594,12 @@ class PollingService:
         return datetime.now() >= status["next_poll"]
 
     def _update_device_status(
-        self, device_type: str, device_id: str, success: bool, error=None
+        self,
+        device_type: str,
+        device_id: str,
+        success: bool,
+        error=None,
+        response_time_ms=None,
     ):
         """
         Update the status of a device.
@@ -564,6 +610,8 @@ class PollingService:
             success (bool): Whether the polling was successful
             error (Exception, optional): The failure cause, used to tell a
                 transient mDNS resolution miss from a genuine outage.
+            response_time_ms (int, optional): How long the successful poll
+                took, recorded in the health log.
         """
         # Initialize the status dictionary if needed
         if device_id not in self.device_status[device_type]:
@@ -638,6 +686,25 @@ class PollingService:
                 )
                 _schedule(backoff + random.uniform(-jitter, jitter))
             _mark_offline()
+
+        # Record the raw check result for the health dashboard's uptime and
+        # response-time metrics. Raw, not grace-adjusted: the log is a record
+        # of actual checks; the mDNS grace window only governs the displayed
+        # online flag. Weather/pressure share this funnel but aren't devices.
+        if device_type in ("spore", "hyphae"):
+            try:
+                log_health_check(
+                    device_id,
+                    device_type,
+                    is_online=success,
+                    response_time_ms=response_time_ms,
+                    error_message=str(error)[:200] if error else None,
+                )
+            except Exception as log_err:
+                self.logger.warning(
+                    f"Failed to log health check for {device_type} "
+                    f"device {device_id}: {log_err}"
+                )
 
         self.logger.debug(
             f"Updated status for {device_type} device {device_id}: "

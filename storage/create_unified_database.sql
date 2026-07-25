@@ -47,6 +47,9 @@ CREATE TABLE IF NOT EXISTS device_hyphae (
     error_code INTEGER NOT NULL DEFAULT 0,
     firmware_version TEXT,
     is_online INTEGER DEFAULT 0,
+    -- Latest diagnostics snapshot from /api/system/info (refreshed periodically)
+    wifi_rssi INTEGER,
+    uptime_sec INTEGER,
     last_update TEXT,
     active INTEGER DEFAULT 1,
     deactivation_reason TEXT,
@@ -75,6 +78,11 @@ CREATE TABLE IF NOT EXISTS device_spore (
     -- when OWM does not supply grnd_level.
     weather_pressure_enabled INTEGER DEFAULT 0,
     altitude_m REAL,
+    -- Latest diagnostics snapshot from /api/diagnostics (refreshed periodically)
+    wifi_rssi INTEGER,
+    heap_free_kb INTEGER,
+    heap_min_free_kb INTEGER,
+    uptime_sec INTEGER,
     last_update TEXT,
     active INTEGER DEFAULT 1,
     deactivation_reason TEXT,

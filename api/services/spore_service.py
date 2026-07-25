@@ -16,6 +16,7 @@ from api.clients.spore_client import SporeClient
 from storage.tables.device_spore import (
     update_device_status,
     update_device_spore,
+    update_device_diagnostics,
     get_device_spore,
 )
 from storage.tables.readings_spore import create_reading, get_latest_reading
@@ -164,6 +165,42 @@ class SporeDataService:
                 f"Recorded firmware version {version} for Spore device {device_id}"
             )
         return version
+
+    async def refresh_diagnostics(self, device_id: int) -> None:
+        """
+        Fetch the device's diagnostics snapshot and record it in the DB.
+
+        Reads /api/diagnostics and stores the system stats (WiFi RSSI, heap,
+        uptime) on the device row for the health dashboard. Called by the
+        polling service at a slower cadence than readings. Never raises:
+        failures are logged and the poll cycle continues unaffected.
+
+        Args:
+            device_id (int): ID of the device
+        """
+        try:
+            client = await self.get_client(device_id)
+            diagnostics = await client.get_diagnostics()
+            system = (
+                diagnostics.get("system") if isinstance(diagnostics, dict) else None
+            )
+            if not isinstance(system, dict):
+                # Older firmware or a simulator without the JSON endpoint
+                self.logger.debug(
+                    f"Spore device {device_id} returned no diagnostics system object"
+                )
+                return
+            update_device_diagnostics(
+                device_id,
+                wifi_rssi=system.get("wifi_rssi_dbm"),
+                heap_free_kb=system.get("heap_free_kb"),
+                heap_min_free_kb=system.get("heap_min_free_kb"),
+                uptime_sec=system.get("uptime_sec"),
+            )
+        except Exception as e:
+            self.logger.warning(
+                f"Failed to refresh diagnostics for Spore device {device_id}: {e}"
+            )
 
     async def get_all_readings(self, device_id: int) -> List[Dict[str, Any]]:
         """
