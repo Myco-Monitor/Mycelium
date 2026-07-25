@@ -102,23 +102,28 @@ class AlertService:
         return []
 
     def _check_offline_rule(self, rule: Dict[str, Any]) -> List[AlertTrigger]:
-        """Check for offline devices."""
+        """Check for devices with no successful contact for the rule's duration."""
         triggers = []
         duration_minutes = rule.get("threshold_duration_minutes", 5)
-        # Naive UTC to match persisted timestamps
-        cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(
-            minutes=duration_minutes
-        )
-        cutoff_str = cutoff.isoformat()
+        # last_update is written by get_timestamp() as naive UTC
+        # "YYYY-MM-DD HH:MM:SS" (space separator); the cutoff must use the
+        # same format for the string comparison to hold — isoformat()'s "T"
+        # sorts after a space, which made every same-day timestamp look stale.
+        cutoff_str = (
+            datetime.now(timezone.utc) - timedelta(minutes=duration_minutes)
+        ).strftime("%Y-%m-%d %H:%M:%S")
 
         devices = self._get_devices_for_rule(rule)
 
         for device in devices:
             last_update = device.get("last_update")
-            is_online = device.get("is_online", 0)
 
-            # Check if device is offline or hasn't updated recently
-            if not is_online or (last_update and last_update < cutoff_str):
+            # last_update marks the last successful contact, so staleness alone
+            # is the "gone for N minutes" test. The offline flag must not
+            # trigger on its own — it flips the moment a device drops,
+            # ignoring the rule's duration. Devices never contacted (no
+            # last_update) aren't "gone"; they were never here.
+            if last_update and last_update < cutoff_str:
                 # Check for duplicate
                 if not alert_history.has_active_alert(
                     rule["rule_id"], device["device_id"]
