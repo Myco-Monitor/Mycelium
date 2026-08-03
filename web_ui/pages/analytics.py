@@ -12,7 +12,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 
 import plotly.graph_objects as go
-from nicegui import ui, app
+from nicegui import ui, app, run
 
 from web_ui.layout import page_layout, back_to_dashboard
 from web_ui.theme import get_colors
@@ -60,6 +60,8 @@ READINGS_SOURCES = {
             "feels_like": "Feels Like",
             "humidity": "Humidity (%)",
             "ambient_pressure": "Pressure (hPa)",
+            "wind_speed": "Wind (m/s)",
+            "wind_deg": "Wind Dir (°)",
         },
         "has_relay": False,
     },
@@ -433,14 +435,14 @@ def _build_dashboard_panel(analytics, rooms, state, colors):
                 "w-40"
             )
 
-            # Quick range buttons
+            # Quick range buttons — fill the date inputs only; nothing loads
+            # until Apply
             def _set_quick_range(days):
-                end_val = state["end_date"]
+                end_val = end_input.value or state["end_date"]
                 new_start = (
                     datetime.strptime(end_val, "%Y-%m-%d") - timedelta(days=days)
                 ).strftime("%Y-%m-%d")
                 start_input.set_value(new_start)
-                _apply_filters()
 
             with ui.row().classes("gap-1"):
                 for label, days in [("7d", 7), ("30d", 30), ("90d", 90), ("1y", 365)]:
@@ -448,12 +450,24 @@ def _build_dashboard_panel(analytics, rooms, state, colors):
                         "flat dense size=sm"
                     )
 
-            # Apply button
-            def _apply_filters():
+            # Apply button — queries run in a worker thread so the UI stays
+            # responsive; rendering happens back on the event loop
+            async def _apply_filters():
                 state["start_date"] = start_input.value or state["start_date"]
                 state["end_date"] = end_input.value or state["end_date"]
                 state["room_id"] = room_select.value
-                _refresh_dashboard(analytics, state, colors, content_container)
+                n = ui.notification("Loading analytics…", spinner=True, timeout=None)
+                try:
+                    data = await run.io_bound(
+                        _fetch_dashboard_data,
+                        analytics,
+                        state["start_date"],
+                        state["end_date"],
+                        state["room_id"],
+                    )
+                finally:
+                    n.dismiss()
+                _render_dashboard(content_container, data, colors)
 
             ui.button("Apply", icon="refresh", on_click=_apply_filters).props("dense")
 
@@ -481,49 +495,67 @@ def _build_dashboard_panel(analytics, rooms, state, colors):
                 "dense outline"
             )
 
-    # Initial load
-    _refresh_dashboard(analytics, state, colors, content_container)
+    # No initial load — data is only fetched when the user presses Apply
+    with content_container:
+        ui.label("Choose a date range and room, then Apply.").classes("text-muted p-4")
 
 
-def _refresh_dashboard(analytics, state, colors, container):
-    """Clear and rebuild the dashboard content area."""
-    container.clear()
-
-    start = state["start_date"]
-    end = state["end_date"]
-    room_id = state["room_id"]
-
-    # Fetch data
-    readings = []
-    harvests = []
-    hourly = []
-    stats = None
-    insights = []
+def _fetch_dashboard_data(analytics, start, end, room_id):
+    """Run all dashboard queries. No UI calls — safe for run.io_bound."""
+    data = {
+        "readings": [],
+        "stats": None,
+        "harvests": [],
+        "hourly": [],
+        "insights": [],
+    }
 
     try:
-        readings = analytics.get_readings_for_period(start, end, room_id)
+        data["readings"] = analytics.get_readings_for_period(start, end, room_id)
     except Exception as e:
         logger.warning(f"Failed to load readings: {e}")
 
     try:
-        stats = analytics.calculate_environmental_stats(readings)
+        data["stats"] = analytics.calculate_environmental_stats(data["readings"])
     except Exception as e:
         logger.warning(f"Failed to calculate stats: {e}")
 
     try:
-        harvests = analytics.get_harvests_for_period(start, end, room_id)
+        data["harvests"] = analytics.get_harvests_for_period(start, end, room_id)
     except Exception as e:
         logger.warning(f"Failed to load harvests: {e}")
 
     try:
-        hourly = analytics.get_hourly_pattern(start, end, room_id)
+        data["hourly"] = analytics.get_hourly_pattern(start, end, room_id)
     except Exception as e:
         logger.warning(f"Failed to load hourly data: {e}")
 
     try:
-        insights = analytics.generate_insights(start, end, room_id)
+        # Hand over what is already fetched so the heavy readings query
+        # is not run a second time inside generate_insights
+        data["insights"] = analytics.generate_insights(
+            start,
+            end,
+            room_id,
+            readings=data["readings"],
+            stats=data["stats"],
+            harvests=data["harvests"],
+        )
     except Exception as e:
         logger.warning(f"Failed to generate insights: {e}")
+
+    return data
+
+
+def _render_dashboard(container, data, colors):
+    """Clear and rebuild the dashboard content area from pre-fetched data."""
+    container.clear()
+
+    readings = data["readings"]
+    stats = data["stats"]
+    harvests = data["harvests"]
+    hourly = data["hourly"]
+    insights = data["insights"]
 
     with container:
         # Sub-tabs

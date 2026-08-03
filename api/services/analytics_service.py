@@ -428,7 +428,13 @@ class AnalyticsService:
         return numerator / ((denominator_x * denominator_y) ** 0.5)
 
     def generate_insights(
-        self, start_date: str, end_date: str, room_id: Optional[int] = None
+        self,
+        start_date: str,
+        end_date: str,
+        room_id: Optional[int] = None,
+        readings: Optional[List[Dict[str, Any]]] = None,
+        stats: Optional[EnvironmentalStats] = None,
+        harvests: Optional[List[Dict[str, Any]]] = None,
     ) -> List[Insight]:
         """
         Generate automated insights from historical data.
@@ -437,6 +443,13 @@ class AnalyticsService:
             start_date (str): Start date
             end_date (str): End date
             room_id (int, optional): Filter by room ID
+            readings (list, optional): Pre-fetched readings for the period;
+                fetched here when None so the caller can avoid a second
+                full-range query
+            stats (EnvironmentalStats, optional): Pre-computed stats; computed
+                from readings when None
+            harvests (list, optional): Pre-fetched harvests; fetched here
+                when None
 
         Returns:
             List[Insight]: List of generated insights
@@ -444,11 +457,13 @@ class AnalyticsService:
         insights = []
 
         # Get environmental data
-        readings = self.get_readings_for_period(start_date, end_date, room_id)
+        if readings is None:
+            readings = self.get_readings_for_period(start_date, end_date, room_id)
         if not readings:
             return insights
 
-        stats = self.calculate_environmental_stats(readings)
+        if stats is None:
+            stats = self.calculate_environmental_stats(readings)
         if not stats:
             return insights
 
@@ -558,7 +573,8 @@ class AnalyticsService:
                 )
 
         # Insight 5: Harvest analysis (if available)
-        harvests = self.get_harvests_for_period(start_date, end_date, room_id)
+        if harvests is None:
+            harvests = self.get_harvests_for_period(start_date, end_date, room_id)
         if harvests and len(harvests) >= 3:
             yields = [h["yield_weight"] for h in harvests if h.get("yield_weight")]
             if len(yields) >= 3:
