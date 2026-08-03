@@ -137,6 +137,10 @@ CREATE TABLE IF NOT EXISTS readings_weather (
     feels_like REAL,
     humidity REAL,
     ambient_pressure REAL,
+    wind_speed REAL,
+    wind_deg REAL,
+    sunrise TEXT,
+    sunset TEXT,
     PRIMARY KEY (device_id, reading_ts),
     FOREIGN KEY (device_id) REFERENCES device_spore(device_id)
 );

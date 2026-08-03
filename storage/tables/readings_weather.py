@@ -17,6 +17,10 @@ def create_reading(
     feels_like: Optional[float] = None,
     humidity: Optional[float] = None,
     ambient_pressure: Optional[float] = None,
+    wind_speed: Optional[float] = None,
+    wind_deg: Optional[float] = None,
+    sunrise: Optional[str] = None,
+    sunset: Optional[str] = None,
 ) -> Tuple[int, str]:
     """
     Create a new weather reading record.
@@ -28,18 +32,34 @@ def create_reading(
         feels_like (float, optional): Feels like temperature reading
         humidity (float, optional): Humidity level reading
         ambient_pressure (float, optional): Ambient pressure reading
+        wind_speed (float, optional): Wind speed (m/s)
+        wind_deg (float, optional): Wind direction (degrees, 0-360)
+        sunrise (str, optional): Sunrise time (naive-UTC ISO)
+        sunset (str, optional): Sunset time (naive-UTC ISO)
 
     Returns:
         Tuple[int, str]: Tuple of device_id and reading_ts of the newly created reading
     """
     query = """
-    INSERT INTO readings_weather (device_id, reading_ts, current_temp, feels_like, 
-                                humidity, ambient_pressure)
-    VALUES (?, ?, ?, ?, ?, ?)
+    INSERT INTO readings_weather (device_id, reading_ts, current_temp, feels_like,
+                                humidity, ambient_pressure, wind_speed, wind_deg,
+                                sunrise, sunset)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """
     execute_insert(
         query,
-        (device_id, reading_ts, current_temp, feels_like, humidity, ambient_pressure),
+        (
+            device_id,
+            reading_ts,
+            current_temp,
+            feels_like,
+            humidity,
+            ambient_pressure,
+            wind_speed,
+            wind_deg,
+            sunrise,
+            sunset,
+        ),
     )
     return (device_id, reading_ts)
 
@@ -122,6 +142,10 @@ def update_reading(
     feels_like: Optional[float] = None,
     humidity: Optional[float] = None,
     ambient_pressure: Optional[float] = None,
+    wind_speed: Optional[float] = None,
+    wind_deg: Optional[float] = None,
+    sunrise: Optional[str] = None,
+    sunset: Optional[str] = None,
 ) -> int:
     """
     Update a weather reading record.
@@ -133,6 +157,10 @@ def update_reading(
         feels_like (float, optional): New feels like temperature reading
         humidity (float, optional): New humidity level reading
         ambient_pressure (float, optional): New ambient pressure reading
+        wind_speed (float, optional): New wind speed (m/s)
+        wind_deg (float, optional): New wind direction (degrees, 0-360)
+        sunrise (str, optional): New sunrise time (naive-UTC ISO)
+        sunset (str, optional): New sunset time (naive-UTC ISO)
 
     Returns:
         int: Number of rows affected (should be 1 if successful)
@@ -156,6 +184,22 @@ def update_reading(
     if ambient_pressure is not None:
         update_fields.append("ambient_pressure = ?")
         params.append(ambient_pressure)
+
+    if wind_speed is not None:
+        update_fields.append("wind_speed = ?")
+        params.append(wind_speed)
+
+    if wind_deg is not None:
+        update_fields.append("wind_deg = ?")
+        params.append(wind_deg)
+
+    if sunrise is not None:
+        update_fields.append("sunrise = ?")
+        params.append(sunrise)
+
+    if sunset is not None:
+        update_fields.append("sunset = ?")
+        params.append(sunset)
 
     if not update_fields:
         return 0  # Nothing to update

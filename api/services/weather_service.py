@@ -268,6 +268,10 @@ class WeatherDataService:
                 feels_like=transformed_data.get("feels_like"),
                 humidity=transformed_data.get("humidity"),
                 ambient_pressure=transformed_data.get("pressure"),
+                wind_speed=transformed_data.get("wind_speed"),
+                wind_deg=transformed_data.get("wind_direction"),
+                sunrise=transformed_data.get("sunrise"),
+                sunset=transformed_data.get("sunset"),
             )
 
             # Add the weather ID to the transformed data
@@ -326,6 +330,22 @@ class WeatherDataService:
         rain_1h = weather_data.get("rain", {}).get("1h", 0)
         snow_1h = weather_data.get("snow", {}).get("1h", 0)
 
+        # Extract sunrise/sunset (unix epoch UTC -> naive-UTC ISO, matching
+        # reading_ts). No epoch-0 fallback: missing values must stay None.
+        sys_data = weather_data.get("sys", {})
+
+        def _epoch_to_iso(value):
+            if value is None:
+                return None
+            return (
+                datetime.fromtimestamp(value, tz=timezone.utc)
+                .replace(tzinfo=None)
+                .isoformat()
+            )
+
+        sunrise = _epoch_to_iso(sys_data.get("sunrise"))
+        sunset = _epoch_to_iso(sys_data.get("sunset"))
+
         return {
             "location_id": location_id,
             "timestamp": timestamp.isoformat(),
@@ -341,6 +361,8 @@ class WeatherDataService:
             "weather_description": weather_description,
             "rain_1h": rain_1h,
             "snow_1h": snow_1h,
+            "sunrise": sunrise,
+            "sunset": sunset,
         }
 
     def _transform_forecast(

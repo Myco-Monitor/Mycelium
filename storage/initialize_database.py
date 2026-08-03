@@ -98,6 +98,10 @@ _COLUMN_ADDITIONS = [
     ("device_spore", "heap_free_kb", "INTEGER"),
     ("device_spore", "heap_min_free_kb", "INTEGER"),
     ("device_spore", "uptime_sec", "INTEGER"),
+    ("readings_weather", "wind_speed", "REAL"),
+    ("readings_weather", "wind_deg", "REAL"),
+    ("readings_weather", "sunrise", "TEXT"),
+    ("readings_weather", "sunset", "TEXT"),
 ]
 
 

@@ -74,6 +74,10 @@ This schema integrates the core monitoring functionality with business operation
 | feels_like      | REAL      | "Feels like" temperature           | -                |
 | humidity        | REAL      | Humidity percentage                | -                |
 | ambient_pressure| REAL      | Ambient pressure (mbar)            | -                |
+| wind_speed      | REAL      | Wind speed (m/s)                   | -                |
+| wind_deg        | REAL      | Wind direction (degrees)           | -                |
+| sunrise         | TEXT      | Sunrise time (naive-UTC ISO)       | -                |
+| sunset          | TEXT      | Sunset time (naive-UTC ISO)        | -                |
 
 ### readings_spore
 | Column           | Type      | Description                        | Constraints      |

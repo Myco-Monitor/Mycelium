@@ -167,6 +167,10 @@ Stores external weather data.
 | feels_like | REAL | "Feels like" temperature | - |
 | humidity | REAL | Humidity percentage | - |
 | ambient_pressure | REAL | Ambient pressure (mbar) | - |
+| wind_speed | REAL | Wind speed (m/s) | - |
+| wind_deg | REAL | Wind direction (degrees) | - |
+| sunrise | TEXT | Sunrise time (naive-UTC ISO) | - |
+| sunset | TEXT | Sunset time (naive-UTC ISO) | - |
 
 **Indexes**:
 - `idx_readings_weather_timestamp`: For time-based queries
