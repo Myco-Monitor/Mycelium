@@ -2,8 +2,9 @@
 Main dashboard page for Mycelium NiceGUI application.
 
 Provides a live, high-level overview of the farm: device online/offline
-status, active alerts, per-room environment (CO2 / temp / humidity averaged
-from the latest spore readings), and local weather.
+status, active alerts, per-tent environment (each Hyphae and its linked
+Spores: averaged CO2 / temp / humidity, barometric pressure, and per-Spore
+snapshots), and local weather.
 """
 
 from datetime import datetime, timezone
@@ -17,6 +18,13 @@ from web_ui.theme import get_colors
 # window (5 missed polls) as offline — its data is shown as dashes, not a number.
 SMOOTH_WINDOW = 5
 STALE_AFTER_SECONDS = 300
+
+# A pressure reading older than this means the Hyphae isn't reporting, so we
+# dash the value instead of showing a frozen number. Pressure publishes every
+# ~5 minutes and each successful poll stores a fresh row (dedup only collapses
+# readings <60s apart), so age is a reliable liveness signal. Allow a couple
+# of missed polls first.
+PRESSURE_STALE_AFTER_SECONDS = 900  # 3 missed pressure polls
 
 
 @ui.page("/main")
@@ -39,13 +47,13 @@ def dashboard_page():
         # Quick stats row (refreshable for live updates)
         dashboard_stats()
 
-        # Per-room environment cards (refreshable)
-        room_environment()
+        # Per-tent environment cards (refreshable)
+        tent_environment()
 
-        # Auto-refresh stats + room environment every 30 seconds
+        # Auto-refresh stats + tent environment every 30 seconds
         def _refresh_live():
             dashboard_stats.refresh()
-            room_environment.refresh()
+            tent_environment.refresh()
 
         ui.timer(30.0, _refresh_live)
 
@@ -53,11 +61,6 @@ def dashboard_page():
         from web_ui.components.weather_card import weather_card
 
         weather_card(colors)
-
-        # Pressure card (only renders if Hyphae devices exist)
-        from web_ui.components.pressure_card import pressure_card
-
-        pressure_card(colors)
 
         # Navigation cards — CSS grid for equal sizing
         ui.label("Quick Access").classes("text-h5 q-mt-lg q-mb-sm")
@@ -121,37 +124,45 @@ def dashboard_stats():
 
 
 @ui.refreshable
-def room_environment():
-    """Per-room environment cards: averaged CO2 / temp / humidity per grow room."""
+def tent_environment():
+    """Per-tent cards: each Hyphae with its linked Spores (plus per-room cards
+    of unlinked Spores), showing averages, pressure, and per-Spore snapshots."""
     colors = get_colors()
-    rooms = _get_active_rooms()
-    if not rooms:
+    tents = _get_tent_data()
+    if not tents:
         return
 
-    ui.label("Room Conditions").classes("text-h5 q-mt-md q-mb-sm")
+    ui.label("Grow Tent Conditions").classes("text-h5 q-mt-md q-mb-sm")
     temp_pref = _temp_pref()
-    with ui.element("div").style(
-        "display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; width: 100%;"
-    ):
-        for room in rooms:
-            _room_card(room, temp_pref, colors)
+    for tent in tents:
+        _tent_card(tent, temp_pref, colors)
 
 
-def _room_card(room: dict, temp_pref: str, colors: dict):
-    """Render one grow room with its averaged environment readings."""
-    avg = _get_room_averages(room["room_id"])
-    fresh = avg["fresh_count"] > 0
-
-    with ui.card().classes("p-4").style("height: 100%;"):
+def _tent_card(tent: dict, temp_pref: str, colors: dict):
+    """Render one grow tent as a full-width card with three columns."""
+    with ui.card().classes("w-full p-4"):
         with ui.row().classes("items-center gap-2 q-mb-sm"):
-            ui.icon("meeting_room", size="sm").style(f"color: {colors['primary']}")
-            ui.label(room.get("room_name", "?")).classes(
-                "text-subtitle1 text-weight-bold"
-            )
+            ui.icon(tent["icon"], size="sm").style(f"color: {colors['primary']}")
+            ui.label(tent["title"]).classes("text-subtitle1 text-weight-bold")
+            ui.label(tent["room_caption"]).classes("text-caption text-muted")
+
+        with ui.element("div").style(
+            "display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; width: 100%;"
+        ):
+            _tent_averages_col(tent, temp_pref)
+            _tent_pressure_col(tent)
+            _tent_snapshot_col(tent, temp_pref)
+
+
+def _tent_averages_col(tent: dict, temp_pref: str):
+    """Averaged CO2 / temp / humidity across the tent's fresh Spores."""
+    avg = tent["avg"]
+    with ui.column().classes("gap-1 min-w-0"):
+        ui.label("Averages").classes("text-caption text-muted")
 
         # When no sensor is reporting fresh data, dash every metric — we don't
-        # know the room's state, so don't show a stale average as if it were live.
-        if fresh:
+        # know the tent's state, so don't show a stale average as if it were live.
+        if avg["fresh_count"] > 0:
             temp_value, temp_unit = _fmt_temp(avg["temp"], temp_pref)
             temp_display = _fmt_unit(temp_value, f"°{temp_unit}")
             co2_display = _fmt_metric(avg["co2"], " ppm", 0)
@@ -165,28 +176,99 @@ def _room_card(room: dict, temp_pref: str, colors: dict):
             _env_stat("water_drop", "Humidity", humidity_display)
 
         # Freshness / coverage footer
-        _room_footer(avg)
+        total = avg["total_count"]
+        fresh_count = avg["fresh_count"]
+        if total == 0:
+            ui.label("No sensors linked").classes("text-caption text-muted q-mt-sm")
+        elif fresh_count == 0:
+            ui.label("No recent data — sensors offline").classes(
+                "text-caption text-negative q-mt-sm"
+            )
+        else:
+            parts = [f"Updated {_humanize_age(avg['age_seconds'])}"]
+            if fresh_count < total:
+                parts.append(f"{fresh_count}/{total} sensors reporting")
+            ui.label(" • ".join(parts)).classes("text-caption text-muted q-mt-sm")
 
 
-def _room_footer(avg: dict):
-    """Small muted line describing data age and how many sensors are reporting."""
-    total = avg["total_count"]
-    fresh_count = avg["fresh_count"]
+def _tent_pressure_col(tent: dict):
+    """Latest barometric pressure from the tent's Hyphae, with staleness states."""
+    pressure = tent["pressure"]
+    with ui.column().classes("gap-1 min-w-0"):
+        ui.label("Pressure").classes("text-caption text-muted")
 
-    if total == 0:
-        ui.label("No sensors assigned").classes("text-caption text-muted q-mt-sm")
-        return
+        if pressure is None:
+            ui.label("—").classes("text-h6")
+            ui.label("No Hyphae linked").classes("text-caption text-muted")
+            return
 
-    if fresh_count == 0:
-        ui.label("No recent data — sensors offline").classes(
-            "text-caption text-negative q-mt-sm"
-        )
-        return
+        with ui.row().classes("items-center gap-2"):
+            # Stale or never-reported: dash the value rather than show a
+            # number we can't vouch for as current.
+            if pressure["stale"]:
+                ui.label("—").classes("text-h6")
+                ui.icon("cloud_off", size="xs").style("color: #9e9e9e")
+            else:
+                ui.label(f"{pressure['pressure_hpa']} hPa").classes("text-h6")
+                healthy_icon = "check_circle" if pressure["healthy"] else "error"
+                healthy_color = "#388e3c" if pressure["healthy"] else "#d32f2f"
+                ui.icon(healthy_icon, size="xs").style(f"color: {healthy_color}")
 
-    parts = [f"Updated {_humanize_age(avg['age_seconds'])}"]
-    if fresh_count < total:
-        parts.append(f"{fresh_count}/{total} sensors reporting")
-    ui.label(" • ".join(parts)).classes("text-caption text-muted q-mt-sm")
+        if not pressure["has_data"]:
+            ui.label("No recent data — device offline").classes(
+                "text-caption text-negative"
+            )
+        elif pressure["stale"]:
+            ui.label(f"Stale — last seen {pressure['timestamp']}").classes(
+                "text-caption text-negative"
+            )
+        else:
+            ui.label(
+                f"Source: {pressure['source']}  |  {pressure['timestamp']}"
+            ).classes("text-caption text-muted")
+
+
+def _tent_snapshot_col(tent: dict, temp_pref: str):
+    """Latest reading per Spore in the tent, as of the last refresh."""
+    spores = tent["avg"]["spores"]
+    with ui.column().classes("gap-1 min-w-0"):
+        ui.label("Sensors").classes("text-caption text-muted")
+
+        if not spores:
+            ui.label("No sensors linked").classes("text-caption text-muted")
+            return
+
+        for spore in spores:
+            with ui.column().classes("gap-0 q-mb-xs"):
+                ui.label(spore["name"]).classes("text-caption text-weight-bold")
+                if not spore["has_data"]:
+                    ui.label("—").classes("text-body2")
+                    ui.label("no data").classes("text-caption text-muted")
+                    continue
+
+                if spore["temp"] is None:
+                    temp_display = "—"
+                else:
+                    temp_value, temp_unit = _fmt_temp(spore["temp"], temp_pref)
+                    temp_display = _fmt_unit(temp_value, f"°{temp_unit}")
+                line = " · ".join(
+                    (
+                        temp_display,
+                        _fmt_metric(spore["humidity"], "%", 0),
+                        _fmt_metric(spore["co2"], " ppm", 0),
+                    )
+                )
+                ui.label(line).classes("text-body2")
+
+                # The snapshot stays visible when stale — the age label below
+                # says how old it is, going red once the Spore stops reporting.
+                stale = (
+                    spore["age_seconds"] is None
+                    or spore["age_seconds"] > STALE_AFTER_SECONDS
+                )
+                ui.label(_humanize_age(spore["age_seconds"])).classes(
+                    "text-caption text-negative" if stale else "text-caption text-muted"
+                )
 
 
 def _env_stat(icon: str, label: str, value: str):
@@ -249,44 +331,89 @@ def _get_alert_count() -> int:
         return 0
 
 
-def _get_active_rooms() -> list:
-    """Get all active grow rooms."""
-    try:
-        from storage.tables.grow_rooms import get_all_grow_rooms
+def _get_tent_data() -> list:
+    """Build one tent group per Hyphae, plus per-room groups of unlinked Spores.
 
-        return get_all_grow_rooms(active_only=True)
+    Each tent dict carries everything its card renders:
+      - ``title`` / ``room_caption`` / ``icon``: card header
+      - ``avg``: output of ``_summarize_spores`` (averages + per-Spore snapshots)
+      - ``pressure``: output of ``_get_hyphae_pressure``, or None when the group
+        has no Hyphae (unlinked Spores)
+    """
+    tents = []
+    try:
+        from storage.tables.device_hyphae import get_all_device_hyphae
+        from storage.tables.device_spore import (
+            get_spores_by_hyphae,
+            get_unlinked_spores,
+        )
+
+        # One tent per Hyphae controller (already sorted by device_name).
+        for hyphae in get_all_device_hyphae():
+            spores = get_spores_by_hyphae(hyphae["device_id"])
+            tents.append(
+                {
+                    "title": hyphae.get("device_name")
+                    or f"Hyphae #{hyphae['device_id']}",
+                    "room_caption": hyphae.get("room_name") or "No room",
+                    "icon": "camping",
+                    "avg": _summarize_spores(spores),
+                    "pressure": _get_hyphae_pressure(hyphae),
+                }
+            )
+
+        # Spores with no Hyphae still get a card, grouped by their grow room.
+        rooms = {}
+        for spore in get_unlinked_spores():
+            rooms.setdefault(spore.get("room_id"), []).append(spore)
+
+        unlinked = []
+        for spores in rooms.values():
+            unlinked.append(
+                {
+                    "title": spores[0].get("room_name") or "Unassigned room",
+                    "room_caption": "Unlinked sensors",
+                    "icon": "meeting_room",
+                    "avg": _summarize_spores(spores),
+                    "pressure": None,
+                }
+            )
+        unlinked.sort(key=lambda t: t["title"])
+        tents.extend(unlinked)
     except Exception:
         return []
+    return tents
 
 
-def _get_room_averages(room_id: int) -> dict:
-    """Average CO2 / temp / humidity across the fresh Spores in a room.
+def _summarize_spores(spores: list) -> dict:
+    """Average CO2 / temp / humidity across a tent's fresh Spores.
 
     Each Spore is first smoothed over its last ``SMOOTH_WINDOW`` readings to damp
-    sensor noise, then the per-Spore values are averaged across the room. A Spore
+    sensor noise, then the per-Spore values are averaged across the tent. A Spore
     whose newest reading is older than ``STALE_AFTER_SECONDS`` is treated as
-    offline and excluded entirely (its metrics show as dashes upstream).
+    offline and excluded from the averages (its metrics show as dashes upstream).
+    Every Spore's newest reading is also captured as its snapshot for the card's
+    sensor column — same query, no extra reads.
 
     Returns a dict with:
-      - ``co2`` / ``temp`` / ``humidity``: room averages, or None if unavailable
+      - ``co2`` / ``temp`` / ``humidity``: tent averages, or None if unavailable
       - ``fresh_count``: Spores contributing fresh data
-      - ``total_count``: active Spores assigned to the room
+      - ``total_count``: Spores in the tent
       - ``age_seconds``: age of the newest contributing reading, or None
+      - ``spores``: per-Spore snapshots
+        [{name, co2, temp, humidity, age_seconds, has_data}]
     """
     result = {
         "co2": None,
         "temp": None,
         "humidity": None,
         "fresh_count": 0,
-        "total_count": 0,
+        "total_count": len(spores),
         "age_seconds": None,
+        "spores": [],
     }
     try:
-        from storage.tables.device_spore import get_all_device_spore
         from storage.tables.readings_spore import get_device_readings
-
-        spores = get_all_device_spore(room_id=room_id)
-        result["total_count"] = len(spores)
 
         sums = {"co2": 0.0, "temp": 0.0, "humidity": 0.0}
         counts = {"co2": 0, "temp": 0, "humidity": 0}
@@ -294,17 +421,38 @@ def _get_room_averages(room_id: int) -> dict:
         newest_age = None
 
         for spore in spores:
+            name = spore.get("device_name") or f"Spore #{spore['device_id']}"
             rows = get_device_readings(spore["device_id"], limit=SMOOTH_WINDOW)
             if not rows:
+                result["spores"].append(
+                    {
+                        "name": name,
+                        "co2": None,
+                        "temp": None,
+                        "humidity": None,
+                        "age_seconds": None,
+                        "has_data": False,
+                    }
+                )
                 continue
 
-            # rows are newest-first; gate on the most recent reading's age.
+            # rows are newest-first; row 0 doubles as the Spore's snapshot.
             age = _reading_age_seconds(rows[0].get("reading_ts"))
+            result["spores"].append(
+                {
+                    "name": name,
+                    "co2": rows[0].get("co2"),
+                    "temp": rows[0].get("temp"),
+                    "humidity": rows[0].get("humidity"),
+                    "age_seconds": age,
+                    "has_data": True,
+                }
+            )
             if age is None or age > STALE_AFTER_SECONDS:
                 continue
 
             # Smooth each metric over this Spore's recent readings, then fold the
-            # per-Spore average into the room totals (equal weight per Spore).
+            # per-Spore average into the tent totals (equal weight per Spore).
             contributed = False
             for key in ("co2", "temp", "humidity"):
                 values = [float(r[key]) for r in rows if r.get(key) is not None]
@@ -326,6 +474,44 @@ def _get_room_averages(room_id: int) -> dict:
     except Exception:
         pass
     return result
+
+
+def _get_hyphae_pressure(hyphae: dict) -> dict:
+    """Latest pressure reading for one Hyphae, with a staleness flag.
+
+    ``stale`` is True when the device has no reading or its newest reading is
+    older than ``PRESSURE_STALE_AFTER_SECONDS``.
+    """
+    latest = None
+    ts = ""
+    age = None
+    try:
+        from storage.tables.readings_pressure import get_latest_pressure
+        from web_ui.format import fmt_time, to_user_dt
+
+        latest = get_latest_pressure(hyphae["device_id"])
+        if latest:
+            try:
+                # reading_ts is naive UTC; age math in UTC, display in user tz
+                dt = datetime.fromisoformat(latest["reading_ts"])
+                local = to_user_dt(dt)
+                ts = f"{fmt_time(dt)} {local.strftime('%b %d')}"
+                age = (
+                    datetime.now(timezone.utc).replace(tzinfo=None) - dt
+                ).total_seconds()
+            except (ValueError, TypeError):
+                ts = str(latest.get("reading_ts", ""))
+    except Exception:
+        latest = None
+
+    return {
+        "pressure_hpa": latest["pressure_hpa"] if latest else None,
+        "source": latest.get("source", "BMP581") if latest else "BMP581",
+        "healthy": bool(latest.get("healthy", 0)) if latest else False,
+        "timestamp": ts,
+        "has_data": latest is not None,
+        "stale": age is None or age > PRESSURE_STALE_AFTER_SECONDS,
+    }
 
 
 def _reading_age_seconds(reading_ts) -> float | None:
