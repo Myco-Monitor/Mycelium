@@ -92,6 +92,10 @@ covers this Mycelium install and survives leaf-cert regeneration.
 To confirm you imported the right CA, match its SHA-256 fingerprint in the
 browser against `openssl x509 -in config/mycelium_local_ca.pem -noout -fingerprint -sha256`.
 
+Trusting the CA is also what lets the browser's **password manager** offer to
+save and autofill the Mycelium login — browsers suppress credential prompts on
+pages reached through a certificate-error interstitial.
+
 This is the same kind of one-time trust you give `ca_root.pem` for devices —
 just a **separate** CA for the web UI. Mycelium never asks you to get a cert
 signed by anyone; each install is self-contained.
@@ -124,7 +128,7 @@ All machine secrets live in the gitignored `data/` directory, owner-only (`0600`
 |---|---|---|
 | Session signing key | `data/.storage_secret` | signs login cookies (prevents forgery) |
 | Encryption key | `data/.pin_key` | Fernet key for everything below |
-| Device PINs | DB (`device_pins`) | encrypted with `.pin_key` |
+| Device credentials (PIN/password) | DB (`device_pins`) | encrypted with `.pin_key` |
 | SMTP password | DB (`user_settings`) | encrypted with `.pin_key` |
 | OWM API key | DB (`user_settings`) | encrypted with `.pin_key` |
 

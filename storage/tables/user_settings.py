@@ -340,6 +340,24 @@ def verify_password(password: str, stored_hash: str) -> bool:
     return hmac.compare_digest(derived, expected)
 
 
+def update_password(user_id: int, new_password: str) -> int:
+    """
+    Set a new account password for a user (hashed with a fresh salt).
+
+    Callers are responsible for authorization: either verifying the user's
+    current password (self-service change) or confirming admin role (reset).
+
+    Args:
+        user_id (int): ID of the user setting
+        new_password (str): New plaintext password to hash and store
+
+    Returns:
+        int: Number of rows affected (0 if user_id not found)
+    """
+    query = "UPDATE user_settings SET user_password = ? WHERE user_id = ?"
+    return execute_update(query, (hash_password(new_password), user_id))
+
+
 def get_user_by_username(user_name: str) -> Optional[Dict[str, Any]]:
     """
     Get a user setting by username.

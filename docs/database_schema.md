@@ -233,7 +233,7 @@ Stores user preferences and settings.
 | timezone_name | TEXT | Timezone name | - |
 | time_format | TEXT | Time format (12 or 24) | - |
 | temp_pref | TEXT | Temperature preference (C or F) | - |
-| reset_pin | TEXT | Mycelium confirmation PIN (Fernet-encrypted at rest) | - |
+| reset_pin | TEXT | DEPRECATED (retired Mycelium PIN; unused — sensitive actions confirm with the account password) | - |
 | farm_id | INTEGER | Reference to farms | FK |
 | created_at | TEXT | Creation timestamp | DEFAULT CURRENT_TIMESTAMP |
 | updated_at | TEXT | Last update timestamp | DEFAULT CURRENT_TIMESTAMP |

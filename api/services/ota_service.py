@@ -47,10 +47,12 @@ class OtaService:
 
     def resolve_pin(self, device_id: int, device_type: str) -> Optional[str]:
         """
-        Return the device's stored PIN from the device_pins table, or None.
+        Return the device's stored credential from the device_pins table, or
+        None. The value is a legacy 4-8 digit PIN or an 8-64 char device
+        password (firmware 3.6.0+); either way it is sent as the "pin" field.
 
-        Device operations use per-device PINs only (set on the Devices page);
-        the Mycelium PIN in Settings is never sent to devices.
+        Device operations use per-device credentials only (set on the Devices
+        page); the Mycelium account password is never sent to devices.
         """
         if has_stored_pin(device_id, device_type):
             pin = get_device_pin(device_id, device_type)

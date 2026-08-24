@@ -60,14 +60,29 @@ def _get_cipher() -> Fernet:
     return Fernet(key)
 
 
+def is_valid_device_credential(pin: str) -> bool:
+    """
+    True if the value is an acceptable device credential.
+
+    Matches exactly what device firmware accepts: a legacy numeric PIN
+    (4-8 digits) or a full device password (8-64 printable ASCII characters,
+    firmware 3.6.0+). Anything else is a typo the devices would reject anyway.
+    """
+    if not pin:
+        return False
+    if 4 <= len(pin) <= 8 and pin.isdigit():
+        return True
+    return 8 <= len(pin) <= 64 and all(0x20 <= ord(c) <= 0x7E for c in pin)
+
+
 def store_device_pin(device_id: int, device_type: str, pin: str) -> bool:
     """
-    Store an encrypted PIN for a device.
+    Store an encrypted credential (legacy PIN or device password) for a device.
 
     Args:
         device_id (int): ID of the device
         device_type (str): Type of device ('spore' or 'hyphae')
-        pin (str): The 5-digit PIN to store
+        pin (str): Legacy 4-8 digit PIN or 8-64 char device password
 
     Returns:
         bool: True if successful
@@ -75,8 +90,11 @@ def store_device_pin(device_id: int, device_type: str, pin: str) -> bool:
     if device_type not in ("spore", "hyphae"):
         raise ValueError("device_type must be 'spore' or 'hyphae'")
 
-    if not pin or len(pin) != 5 or not pin.isdigit():
-        raise ValueError("PIN must be a 5-digit number")
+    pin = (pin or "").strip()
+    if not is_valid_device_credential(pin):
+        raise ValueError(
+            "Credential must be a 4-8 digit PIN or an 8-64 character password"
+        )
 
     cipher = _get_cipher()
     encrypted_pin = cipher.encrypt(pin.encode()).decode()

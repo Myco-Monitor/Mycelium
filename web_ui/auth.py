@@ -88,15 +88,28 @@ def login_page():
             error_label = ui.label("").classes("text-negative q-mb-sm")
             error_label.set_visibility(False)
 
-            username = ui.input("Username", placeholder="Enter your username").classes(
-                "full-width q-mb-sm"
-            )
-            password = ui.input(
-                "Password",
-                placeholder="Enter your password",
-                password=True,
-                password_toggle_button=True,
-            ).classes("full-width q-mb-md")
+            # A real <form> element (not just inputs in a card) is what lets
+            # browser password managers offer to save/autofill the credentials.
+            # NOTE: autocomplete must be set via .props() — the ui.input
+            # autocomplete= kwarg is NiceGUI's word-suggestion datalist.
+            with ui.element("form").props('onsubmit="return false"').classes(
+                "full-width"
+            ):
+                username = (
+                    ui.input("Username", placeholder="Enter your username")
+                    .props("name=username autocomplete=username")
+                    .classes("full-width q-mb-sm")
+                )
+                password = (
+                    ui.input(
+                        "Password",
+                        placeholder="Enter your password",
+                        password=True,
+                        password_toggle_button=True,
+                    )
+                    .props("name=password autocomplete=current-password")
+                    .classes("full-width q-mb-md")
+                )
 
             async def handle_login():
                 if not username.value or not password.value:
@@ -166,21 +179,34 @@ def signup_page():
             error_label = ui.label("").classes("text-negative q-mb-sm")
             error_label.set_visibility(False)
 
-            username = ui.input("Username", placeholder="Choose a username").classes(
-                "full-width q-mb-sm"
-            )
-            password = ui.input(
-                "Password",
-                placeholder="Create a password",
-                password=True,
-                password_toggle_button=True,
-            ).classes("full-width q-mb-sm")
-            confirm = ui.input(
-                "Confirm Password",
-                placeholder="Confirm your password",
-                password=True,
-                password_toggle_button=True,
-            ).classes("full-width q-mb-md")
+            with ui.element("form").props('onsubmit="return false"').classes(
+                "full-width"
+            ):
+                username = (
+                    ui.input("Username", placeholder="Choose a username")
+                    .props("name=username autocomplete=username")
+                    .classes("full-width q-mb-sm")
+                )
+                password = (
+                    ui.input(
+                        "Password",
+                        placeholder="Create a password",
+                        password=True,
+                        password_toggle_button=True,
+                    )
+                    .props("name=new-password autocomplete=new-password")
+                    .classes("full-width q-mb-sm")
+                )
+                confirm = (
+                    ui.input(
+                        "Confirm Password",
+                        placeholder="Confirm your password",
+                        password=True,
+                        password_toggle_button=True,
+                    )
+                    .props("name=confirm-password autocomplete=new-password")
+                    .classes("full-width q-mb-md")
+                )
 
             async def handle_signup():
                 if not username.value or not password.value or not confirm.value:
@@ -193,8 +219,8 @@ def signup_page():
                     error_label.set_visibility(True)
                     return
 
-                if len(password.value) < 6:
-                    error_label.text = "Password must be at least 6 characters."
+                if len(password.value) < 8:
+                    error_label.text = "Password must be at least 8 characters."
                     error_label.set_visibility(True)
                     return
 

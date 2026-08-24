@@ -1,11 +1,13 @@
 """
 Settings page for Mycelium NiceGUI application.
 
-User profile settings only: account info, weather config, preferences,
-Mycelium PIN, hub updates, and email notification (SMTP) configuration.
+User profile settings only: account info, password change, weather config,
+preferences, hub updates, and email notification (SMTP) configuration.
 
 Farm and room management has been moved to the Farm Overview page.
 """
+
+import html as html_mod
 
 from nicegui import ui, app, run
 from web_ui.layout import page_layout, back_to_dashboard
@@ -32,6 +34,9 @@ from storage.tables.user_settings import (
     delete_user_setting,
     get_user_by_username,
     count_admins,
+    authenticate_user,
+    verify_password,
+    update_password,
 )
 
 # Canonical IANA names (legacy "US/*" aliases need Debian's optional
@@ -128,11 +133,68 @@ def user_admin_section(current_uid: int):
                     ui.notify(f"Deleted '{name}'.", type="positive")
                     user_admin_section.refresh()
 
-                del_btn = ui.button(
-                    icon="delete", on_click=lambda _, h=_delete: h()
-                ).props("flat dense color=negative")
-                if is_self or last_admin:
-                    del_btn.disable()  # UX hint; handler still enforces the rule
+                async def _reset_password(
+                    target_id=uid_u, name=u.get("user_name", "")
+                ):
+                    with ui.dialog() as dlg, ui.card().classes("w-96"):
+                        ui.label(f"Reset password for '{name}'").classes("text-h6")
+                        ui.label(
+                            "Sets a new password without the current one. "
+                            "The user should change it after logging in."
+                        ).classes("text-caption text-muted")
+                        with ui.element("form").props('onsubmit="return false"'):
+                            npw = (
+                                ui.input(
+                                    "New password",
+                                    password=True,
+                                    password_toggle_button=True,
+                                )
+                                .props("autocomplete=new-password")
+                                .classes("w-full")
+                            )
+                            cpw = (
+                                ui.input(
+                                    "Confirm new password",
+                                    password=True,
+                                    password_toggle_button=True,
+                                )
+                                .props("autocomplete=new-password")
+                                .classes("w-full q-mt-sm")
+                            )
+                        with ui.row().classes("justify-end w-full q-gutter-sm"):
+                            ui.button(
+                                "Cancel", on_click=lambda: dlg.submit(None)
+                            ).props("flat")
+                            ui.button(
+                                "Reset",
+                                on_click=lambda: dlg.submit(
+                                    (npw.value or "", cpw.value or "")
+                                ),
+                            ).props("color=primary")
+                    result = await dlg
+                    if result is None:
+                        return
+                    pw, confirm_pw = result
+                    if len(pw) < 8:
+                        ui.notify(
+                            "Password must be at least 8 characters.", type="negative"
+                        )
+                        return
+                    if pw != confirm_pw:
+                        ui.notify("Passwords do not match.", type="negative")
+                        return
+                    update_password(target_id, pw)
+                    ui.notify(f"Password reset for '{name}'.", type="positive")
+
+                with ui.row().classes("items-center gap-1"):
+                    ui.button(
+                        icon="lock_reset", on_click=lambda _, h=_reset_password: h()
+                    ).props("flat dense color=primary").tooltip("Reset password")
+                    del_btn = ui.button(
+                        icon="delete", on_click=lambda _, h=_delete: h()
+                    ).props("flat dense color=negative")
+                    if is_self or last_admin:
+                        del_btn.disable()  # UX hint; handler still enforces the rule
 
         ui.separator().classes("q-my-md")
 
@@ -141,7 +203,7 @@ def user_admin_section(current_uid: int):
         new_name = ui.input("Username").props("dense outlined").classes("w-full")
         new_pw = (
             ui.input("Password", password=True, password_toggle_button=True)
-            .props("dense outlined")
+            .props("dense outlined autocomplete=new-password")
             .classes("w-full q-mt-sm")
         )
         new_role = (
@@ -156,8 +218,8 @@ def user_admin_section(current_uid: int):
             if len(name) < 3:
                 ui.notify("Username must be at least 3 characters.", type="negative")
                 return
-            if len(pw) < 6:
-                ui.notify("Password must be at least 6 characters.", type="negative")
+            if len(pw) < 8:
+                ui.notify("Password must be at least 8 characters.", type="negative")
                 return
             if get_user_by_username(name):
                 ui.notify("Username already exists.", type="negative")
@@ -173,10 +235,8 @@ def user_admin_section(current_uid: int):
 
 def _hub_update_section(uid):
     """Settings card: show the current version, check for the newest release, and
-    (admin only) apply it with Mycelium-PIN confirmation. Rendered only on a
-    managed appliance — the caller gates on is_managed_appliance()."""
-    import hmac
-
+    (admin only) apply it after re-entering the account password. Rendered only
+    on a managed appliance — the caller gates on is_managed_appliance()."""
     state = {"info": None}
 
     # Any 'pending' row still here is from an interrupted run (a real update
@@ -301,31 +361,38 @@ def _hub_update_section(uid):
             history.refresh()
 
         async def _confirm_and_update(ref):
+            username = app.storage.user.get("username") or ""
             with ui.dialog() as dlg, ui.card():
                 ui.label(f"Confirm update to {ref}").classes("text-h6")
                 ui.label(
-                    "Enter your Mycelium PIN to apply. The hub will restart."
+                    "Enter your account password to apply. The hub will restart."
                 ).classes("text-caption text-muted")
-                pin_in = (
-                    ui.input("Mycelium PIN").props("type=password").classes("w-full")
-                )
+                # Form wrapper + hidden username let the browser autofill the
+                # saved Mycelium account password into this re-auth dialog.
+                with ui.element("form").props('onsubmit="return false"').classes(
+                    "w-full"
+                ):
+                    ui.html(
+                        '<input type="text" name="username" '
+                        'autocomplete="username" '
+                        f'value="{html_mod.escape(username, quote=True)}" '
+                        'style="display:none" tabindex="-1">'
+                    )
+                    pw_in = (
+                        ui.input("Account password", password=True)
+                        .props("name=password autocomplete=current-password")
+                        .classes("w-full")
+                    )
                 with ui.row().classes("justify-end w-full q-gutter-sm"):
                     ui.button("Cancel", on_click=lambda: dlg.submit(None)).props("flat")
                     ui.button(
-                        "Confirm", on_click=lambda: dlg.submit(pin_in.value)
+                        "Confirm", on_click=lambda: dlg.submit(pw_in.value)
                     ).props("color=primary")
             entered = await dlg
             if entered is None:
                 return
-            stored = (get_user_setting(uid) or {}).get("reset_pin") or ""
-            if not stored:
-                ui.notify(
-                    "Set a Mycelium PIN first (Mycelium PIN section above).",
-                    type="negative",
-                )
-                return
-            if not hmac.compare_digest(str(entered).strip(), str(stored)):
-                ui.notify("Incorrect PIN", type="negative")
+            if not authenticate_user(username, str(entered)):
+                ui.notify("Incorrect password", type="negative")
                 return
             await _run_update(ref)
 
@@ -410,6 +477,76 @@ def settings_page():
                     "Last Updated",
                     fmt_datetime(user_info.get("updated_at"), fallback=""),
                 )
+
+        # ---- Section 1b: Account password ----
+        with ui.card().classes("w-full"):
+            ui.label("Change Password").classes("text-h5 q-mb-md")
+            ui.label(
+                "Your account password also confirms sensitive actions such as "
+                "hub updates. Minimum 8 characters."
+            ).classes("text-muted text-caption q-mb-sm")
+
+            # Form wrapper + hidden username make browsers offer to save the
+            # updated password against this Mycelium install.
+            with ui.element("form").props('onsubmit="return false"').classes(
+                "w-full"
+            ):
+                ui.html(
+                    '<input type="text" name="username" autocomplete="username" '
+                    f'value="{html_mod.escape(user_info.get("user_name", ""), quote=True)}" '
+                    'style="display:none" tabindex="-1">'
+                )
+                current_pw = (
+                    ui.input(
+                        "Current password",
+                        password=True,
+                        password_toggle_button=True,
+                    )
+                    .props("name=password autocomplete=current-password")
+                    .classes("w-full")
+                )
+                new_account_pw = (
+                    ui.input(
+                        "New password",
+                        password=True,
+                        password_toggle_button=True,
+                    )
+                    .props("name=new-password autocomplete=new-password")
+                    .classes("w-full q-mt-sm")
+                )
+                confirm_account_pw = (
+                    ui.input(
+                        "Confirm new password",
+                        password=True,
+                        password_toggle_button=True,
+                    )
+                    .props("name=confirm-password autocomplete=new-password")
+                    .classes("w-full q-mt-sm")
+                )
+
+            def _change_password():
+                stored_hash = (get_user_setting(uid) or {}).get("user_password") or ""
+                if not verify_password(current_pw.value or "", stored_hash):
+                    ui.notify("Current password is incorrect.", type="negative")
+                    return
+                new_pw_val = new_account_pw.value or ""
+                if len(new_pw_val) < 8:
+                    ui.notify(
+                        "New password must be at least 8 characters.", type="negative"
+                    )
+                    return
+                if new_pw_val != (confirm_account_pw.value or ""):
+                    ui.notify("New passwords do not match.", type="negative")
+                    return
+                update_password(uid, new_pw_val)
+                current_pw.value = ""
+                new_account_pw.value = ""
+                confirm_account_pw.value = ""
+                ui.notify("Password changed.", type="positive")
+
+            ui.button(
+                "Change Password", icon="lock_reset", on_click=_change_password
+            ).props("color=primary").classes("q-mt-sm")
 
         # ---- Section 2: Preferences ----
         with ui.card().classes("w-full"):
@@ -507,62 +644,11 @@ def settings_page():
 
             zip_input.on("blur", _save_zip)
 
-        # ---- Section 4: Mycelium PIN ----
-        with ui.card().classes("w-full"):
-            ui.label("Mycelium PIN").classes("text-h5 q-mb-md")
-            ui.label(
-                "Confirms sensitive Mycelium actions such as hub updates. "
-                "PINs for Spore and Hyphae devices are set per-device on the "
-                "Devices page."
-            ).classes("text-muted text-caption q-mb-sm")
-
-            pin_input = (
-                ui.input(
-                    placeholder="Enter 4-8 digit PIN",
-                    password=True,
-                    password_toggle_button=True,
-                )
-                .props("maxlength=8")
-                .classes("w-full")
-            )
-
-            pin_confirm = (
-                ui.input(
-                    placeholder="Confirm PIN",
-                    password=True,
-                    password_toggle_button=True,
-                )
-                .props("maxlength=8")
-                .classes("w-full q-mt-sm")
-            )
-
-            ui.label(
-                "A Mycelium PIN is currently set."
-                if user_info.get("reset_pin")
-                else "No PIN set yet."
-            ).classes("text-muted text-caption q-mt-sm")
-
-            def _save_pin(e):
-                pin = pin_input.value.strip()
-                confirm = pin_confirm.value.strip()
-                if not pin:
-                    return
-                if not pin.isdigit() or not (4 <= len(pin) <= 8):
-                    ui.notify("PIN must be 4-8 digits", type="negative")
-                    return
-                if pin != confirm:
-                    ui.notify("PINs do not match", type="negative")
-                    return
-                update_user_setting(uid, reset_pin=pin)
-                ui.notify("Mycelium PIN saved", type="positive")
-
-            pin_confirm.on("blur", _save_pin)
-
-        # ---- Section 5: Hub Updates (managed appliance only) ----
+        # ---- Section 4: Hub Updates (managed appliance only) ----
         if is_managed_appliance():
             _hub_update_section(uid)
 
-        # ---- Section 6: Email Notifications (SMTP) ----
+        # ---- Section 5: Email Notifications (SMTP) ----
         with ui.card().classes("w-full"):
             ui.label("Email Notifications").classes("text-h5 q-mb-md")
             ui.label(

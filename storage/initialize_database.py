@@ -105,36 +105,16 @@ _COLUMN_ADDITIONS = [
 ]
 
 
-def _encrypt_plaintext_pins(conn):
-    """Encrypt any legacy plaintext user_settings.reset_pin values in place.
-
-    reset_pin joined _ENCRYPTED_FIELDS after installs already stored it as
-    plaintext. A PIN is never a valid Fernet token, so a value that
-    decrypt_or_plaintext() returns unchanged is plaintext and gets encrypted;
-    already-encrypted rows are left alone, making this safe on every startup.
-    """
-    from storage import crypto
-
-    rows = conn.execute(
-        "SELECT user_id, reset_pin FROM user_settings"
-        " WHERE reset_pin IS NOT NULL AND reset_pin != ''"
-    ).fetchall()
-    for user_id, pin in rows:
-        if crypto.decrypt_or_plaintext(pin) == pin:
-            print(f"Encrypting plaintext reset_pin for user {user_id}")
-            conn.execute(
-                "UPDATE user_settings SET reset_pin = ? WHERE user_id = ?",
-                (crypto.encrypt(pin), user_id),
-            )
-
-
 def apply_migrations(db_path):
     """
     Idempotently bring an existing database up to the current schema.
 
-    Only adds columns that are missing and encrypts legacy plaintext secrets,
-    so it is safe to run on every startup and on a freshly created database
-    (where it is a no-op).
+    Only adds columns that are missing, so it is safe to run on every startup
+    and on a freshly created database (where it is a no-op).
+
+    Note: user_settings.reset_pin (the retired "Mycelium PIN") is deprecated —
+    sensitive actions are confirmed with the account password instead. The
+    column is kept for schema stability but is no longer read or written.
 
     Returns:
         bool: True on success, False if the database could not be opened/altered.
@@ -149,7 +129,6 @@ def apply_migrations(db_path):
             if not _column_exists(conn, table, column):
                 print(f"Adding missing column {table}.{column}")
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
-        _encrypt_plaintext_pins(conn)
         conn.commit()
         return True
     except sqlite3.Error as e:

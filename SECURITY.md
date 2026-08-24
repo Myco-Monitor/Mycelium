@@ -72,7 +72,7 @@ Mycelium is designed to run locally and keep all data on the operator's machine:
   per-install local CA you import once (mkcert-style), or a certificate you supply.
 - **HTTPS-only device communication** using CSP-provisioned device certificates
   (`config/ca_root.pem`).
-- **Secrets encrypted at rest** — device PINs, the SMTP password, and the
+- **Secrets encrypted at rest** — device credentials (PIN/password), the SMTP password, and the
   OpenWeatherMap API key are encrypted with a per-install key; the
   session-signing key is generated automatically. These live in the gitignored
   `data/` directory with owner-only (`0600`) permissions.

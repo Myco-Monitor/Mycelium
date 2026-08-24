@@ -35,7 +35,11 @@ from storage.tables.device_hyphae import (
 )
 from storage.tables.grow_rooms import get_all_grow_rooms
 from storage.tables.relay_settings import get_device_relay_settings
-from storage.tables.device_pins import store_device_pin, has_stored_pin
+from storage.tables.device_pins import (
+    store_device_pin,
+    has_stored_pin,
+    is_valid_device_credential,
+)
 from storage.tables.readings_spore import get_latest_reading as get_latest_spore_reading
 from storage.tables.readings_hyphae import get_latest_relay_states
 from storage.tables.readings_pressure import get_latest_pressure
@@ -1096,12 +1100,16 @@ def _open_add_hyphae_dialog(hyphae_table_refresh, stat_cards_refresh):
             },
         ).classes("w-full")
 
-        pin_input = ui.input(
-            label="Device PIN",
-            placeholder="5-digit PIN",
-            password=True,
-            password_toggle_button=True,
-        ).classes("w-full")
+        pin_input = (
+            ui.input(
+                label="Device password (or legacy PIN)",
+                placeholder="Password or PIN",
+                password=True,
+                password_toggle_button=True,
+            )
+            .props("maxlength=64 autocomplete=off")
+            .classes("w-full")
+        )
 
         rooms = _room_options()
         room_select = ui.select(
@@ -1110,9 +1118,10 @@ def _open_add_hyphae_dialog(hyphae_table_refresh, stat_cards_refresh):
             with_input=True,
         ).classes("w-full")
 
-        ui.label("Enter the device IP, PIN, and assign it to a room.").classes(
-            "text-muted text-caption q-mt-sm"
-        )
+        ui.label(
+            "Enter the device hostname, its password (or legacy PIN), and "
+            "assign it to a room."
+        ).classes("text-muted text-caption q-mt-sm")
 
         with ui.row().classes("w-full justify-end gap-2 q-mt-md"):
             ui.button("Cancel", on_click=dialog.close).props("flat")
@@ -2142,14 +2151,14 @@ def _device_management_panel(
         _spore_hyphae_association_card(device)
         _spore_pressure_source_card(device)
 
-    # --- PIN Section ---
+    # --- Device credential section ---
     with ui.card().classes("w-full p-4 q-mb-md"):
-        ui.label("Device PIN").classes("text-h6 q-mb-sm")
+        ui.label("Device Password").classes("text-h6 q-mb-sm")
 
         pin_status = ota_svc.get_pin_status(device_id, device_type)
         status_map = {
-            "device": ("Per-device PIN stored", "positive"),
-            "missing": ("No PIN configured — set one below", "negative"),
+            "device": ("Credential stored for this device", "positive"),
+            "missing": ("No credential configured — set one below", "negative"),
         }
         status_text, status_type = status_map.get(pin_status, ("Unknown", "grey"))
 
@@ -2157,30 +2166,36 @@ def _device_management_panel(
             ui.icon("vpn_key", size="sm").style(f"color: {colors['primary']}")
             ui.label(f"Status: {status_text}").classes("text-caption")
 
-        ui.label("Set a 5-digit PIN specific to this device:").classes(
-            "text-caption text-muted q-mb-xs"
-        )
+        ui.label(
+            "Enter this device's password (or legacy 4-8 digit PIN), exactly as "
+            "set on the device itself:"
+        ).classes("text-caption text-muted q-mb-xs")
 
         with ui.row().classes("items-end gap-2"):
+            # autocomplete=off: this is ANOTHER device's credential — the
+            # browser must not save it as a Mycelium login.
             pin_input = (
                 ui.input(
-                    label="Device PIN",
-                    placeholder="5-digit PIN",
+                    label="Device password (or legacy PIN)",
+                    placeholder="Password or PIN",
                 )
-                .props("maxlength=5 type=password")
-                .classes("w-40")
+                .props("maxlength=64 type=password autocomplete=off")
+                .classes("w-64")
             )
 
             def save_pin():
                 val = pin_input.value.strip() if pin_input.value else ""
-                if not val or len(val) != 5 or not val.isdigit():
-                    ui.notify("PIN must be exactly 5 digits", type="warning")
+                if not is_valid_device_credential(val):
+                    ui.notify(
+                        "Must be a 4-8 digit PIN or an 8-64 character password",
+                        type="warning",
+                    )
                     return
                 store_device_pin(device_id, device_type, val)
-                ui.notify("Device PIN saved", type="positive")
+                ui.notify("Device credential saved", type="positive")
                 pin_input.value = ""
 
-            ui.button("Save PIN", icon="save", on_click=save_pin).props(
+            ui.button("Save", icon="save", on_click=save_pin).props(
                 "color=primary size=sm"
             )
 
@@ -2190,7 +2205,8 @@ def _device_management_panel(
                 def clear_pin():
                     delete_device_pin(device_id, device_type)
                     ui.notify(
-                        "Device PIN cleared — device operations will require a new PIN",
+                        "Device credential cleared — device operations will "
+                        "require it to be re-entered",
                         type="info",
                     )
 

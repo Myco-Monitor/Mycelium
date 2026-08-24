@@ -133,12 +133,14 @@ def my_page():
 **Auth pattern:**
 - Session via `app.storage.user` (contains `user_id`, `username`)
 - Each page checks `user.get('user_id')` — no middleware (NiceGUI limitation)
-- Login/signup in `web_ui/auth.py`
+- Login/signup in `web_ui/auth.py`; account passwords are PBKDF2-hashed (min 8 chars); self-service change + admin reset live on the Settings page
+- Sensitive hub actions (e.g. hub updates) confirm by re-entering the account password (`authenticate_user`); the former "Mycelium PIN" is retired (`user_settings.reset_pin` column kept but unused)
+- Password-manager friendliness: auth inputs sit inside `ui.element('form')` wrappers with `name=`/`autocomplete=` set via `.props()` — never via the `ui.input(autocomplete=...)` kwarg, which is a word-suggestion datalist
 
-**PIN management:**
-- Device operations use per-device PINs only (`device_pins` table); `user_settings.reset_pin` is the Mycelium PIN for confirming sensitive hub actions (e.g. hub updates) and is never sent to devices
-- Both are Fernet-encrypted with the key in `data/.pin_key`
-- OTA service resolves PIN via `resolve_pin(device_id, device_type)` — no PIN means the operation fails with a prompt to set one on the Devices page
+**Device credential management:**
+- Device operations use per-device credentials only (`device_pins` table): a legacy 4-8 digit PIN or an 8-64 char device password (firmware 3.6.0+), always sent to the device as the `"pin"` field; the Mycelium account password is never sent to devices
+- Stored Fernet-encrypted with the key in `data/.pin_key`; validated by `is_valid_device_credential()`
+- OTA service resolves the credential via `resolve_pin(device_id, device_type)` — none stored means the operation fails with a prompt to set one on the Devices page
 
 ### Package naming
 The NiceGUI UI package is `web_ui/` (not `ui/`) because `ui` conflicts with `from nicegui import ui`.
