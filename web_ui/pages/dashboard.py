@@ -3,8 +3,12 @@ Main dashboard page for Mycelium NiceGUI application.
 
 Provides a live, high-level overview of the farm: device online/offline
 status, active alerts, per-tent environment (each Hyphae and its linked
-Spores: averaged CO2 / temp / humidity, barometric pressure, and per-Spore
+Spores: averaged CO2 / humidity / temp, barometric pressure, and per-Spore
 snapshots), and local weather.
+
+Display convention: environment metrics always appear in the order
+CO2, humidity, temperature — everywhere in the UI — so values line up
+across cards and pages for easy comparison.
 """
 
 from datetime import datetime, timezone
@@ -155,7 +159,7 @@ def _tent_card(tent: dict, temp_pref: str, colors: dict):
 
 
 def _tent_averages_col(tent: dict, temp_pref: str):
-    """Averaged CO2 / temp / humidity across the tent's fresh Spores."""
+    """Averaged CO2 / humidity / temp across the tent's fresh Spores."""
     avg = tent["avg"]
     with ui.column().classes("gap-1 min-w-0"):
         ui.label("Averages").classes("text-caption text-muted")
@@ -170,10 +174,11 @@ def _tent_averages_col(tent: dict, temp_pref: str):
         else:
             co2_display = temp_display = humidity_display = "—"
 
+        # Standard metric order: CO2, humidity, temp
         with ui.row().classes("w-full justify-around"):
             _env_stat("co2", "CO₂", co2_display)
-            _env_stat("thermostat", "Temp", temp_display)
             _env_stat("water_drop", "Humidity", humidity_display)
+            _env_stat("thermostat", "Temp", temp_display)
 
         # Freshness / coverage footer
         total = avg["total_count"]
@@ -251,11 +256,12 @@ def _tent_snapshot_col(tent: dict, temp_pref: str):
                 else:
                     temp_value, temp_unit = _fmt_temp(spore["temp"], temp_pref)
                     temp_display = _fmt_unit(temp_value, f"°{temp_unit}")
+                # Standard metric order: CO2, humidity, temp
                 line = " · ".join(
                     (
-                        temp_display,
-                        _fmt_metric(spore["humidity"], "%", 0),
                         _fmt_metric(spore["co2"], " ppm", 0),
+                        _fmt_metric(spore["humidity"], "%", 0),
+                        temp_display,
                     )
                 )
                 ui.label(line).classes("text-body2")
@@ -386,7 +392,7 @@ def _get_tent_data() -> list:
 
 
 def _summarize_spores(spores: list) -> dict:
-    """Average CO2 / temp / humidity across a tent's fresh Spores.
+    """Average CO2 / humidity / temp across a tent's fresh Spores.
 
     Each Spore is first smoothed over its last ``SMOOTH_WINDOW`` readings to damp
     sensor noise, then the per-Spore values are averaged across the tent. A Spore

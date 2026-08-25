@@ -793,12 +793,13 @@ def _open_edit_rule_dialog(rule: dict, alert_service: AlertService, colors: dict
                     backward=lambda v: v in ("threshold_high", "threshold_low"),
                 )
             ):
+                # Standard metric order: CO2, humidity, temp
                 metric_select = ui.select(
                     label="Metric",
                     options={
                         "co2": "CO2 (ppm)",
-                        "temperature": "Temperature",
                         "humidity": "Humidity (%)",
+                        "temperature": "Temperature",
                     },
                     value=rule.get("metric", "co2"),
                 ).classes("w-full")

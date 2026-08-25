@@ -1289,7 +1289,7 @@ def _render_spore_detail(device: Dict, colors: dict, selected_device: Dict = Non
 def _spore_db_reading(device: Dict):
     """Build a Spore reading view from the database (no device call).
 
-    Temp/humidity/CO2 come from readings_spore (filled by the ~60s poller).
+    CO2/humidity/temp come from readings_spore (filled by the ~60s poller).
     Spore has no pressure sensor, so pressure is the linked Hyphae's latest
     stored pressure when one is associated. Returns (reading, as_of) where
     `reading` uses the same keys as the live /api/readings/latest payload, or
@@ -1350,12 +1350,13 @@ def _spore_readings_panel(device: Dict, colors: dict):
 
         temp_value, temp_unit = _fmt_temp(readings.get("temperature"), _temp_pref())
 
+        # Standard metric order: CO2, humidity, temp (then extras like pressure)
         with ui.row().classes("w-full gap-4 flex-wrap"):
             _reading_card(
-                "Temperature",
-                temp_value,
-                temp_unit,
-                "thermostat",
+                "CO2",
+                _fmt_reading(readings.get("co2"), 0),
+                "ppm",
+                "co2",
                 colors["primary"],
             )
             _reading_card(
@@ -1366,10 +1367,10 @@ def _spore_readings_panel(device: Dict, colors: dict):
                 colors["primary"],
             )
             _reading_card(
-                "CO2",
-                _fmt_reading(readings.get("co2"), 0),
-                "ppm",
-                "co2",
+                "Temperature",
+                temp_value,
+                temp_unit,
+                "thermostat",
                 colors["primary"],
             )
             _reading_card(
@@ -1578,9 +1579,10 @@ def _spore_diagnostics_body(device: Dict, state: Dict):
         ui.label("Sensors").classes("text-subtitle1 text-weight-bold q-mb-sm")
         s_temp, s_unit = _fmt_temp(sensors.get("temperature"), _temp_pref())
         _kv("Data Valid", "Yes" if sensors.get("valid") else "No")
+        # Standard metric order: CO2, humidity, temp
         _kv("CO2", f"{_fmt_reading(sensors.get('co2'), 0)} ppm")
-        _kv("Temperature", f"{s_temp} {s_unit}")
         _kv("Humidity", f"{_fmt_reading(sensors.get('humidity'), 1)} %")
+        _kv("Temperature", f"{s_temp} {s_unit}")
 
     # --- Error history ---
     # Entry timestamps are seconds-since-boot; convert to wall-clock using the

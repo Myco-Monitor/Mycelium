@@ -130,6 +130,12 @@ def my_page():
 - Dark mode: backgrounds `#333`/`#4d4d4d`, Light mode: `#c2c2c2`/`#a8a8a8`
 - Theme stored in `app.storage.user`, applied via `apply_theme()` which sets Quasar colors + CSS
 
+**Metric display order (standard):**
+- Environment metrics ALWAYS render in the order **CO2, humidity, temperature**
+  (then extras like pressure) — cards, rows, dropdowns, chart legends, key/value
+  lists — so values line up across pages for easy comparison. Pages without CO2
+  (e.g. weather) still put humidity before temperature.
+
 **Auth pattern:**
 - Session via `app.storage.user` (contains `user_id`, `username`)
 - Each page checks `user.get('user_id')` — no middleware (NiceGUI limitation)

@@ -48,17 +48,19 @@ READINGS_SOURCES = {
         "label": "Spore Sensor Readings",
         "module": readings_spore,
         "device_fn": lambda: device_spore.get_all_device_spore(active_only=True),
-        "metrics": {"co2": "CO2 (ppm)", "temp": "Temp", "humidity": "Humidity (%)"},
+        # Standard metric order: CO2, humidity, temp
+        "metrics": {"co2": "CO2 (ppm)", "humidity": "Humidity (%)", "temp": "Temp"},
         "has_relay": False,
     },
     "readings_weather": {
         "label": "Weather Readings",
         "module": readings_weather,
         "device_fn": lambda: device_spore.get_all_device_spore(active_only=True),
+        # Humidity before temp per the standard metric order (no CO2 here)
         "metrics": {
+            "humidity": "Humidity (%)",
             "current_temp": "Temp",
             "feels_like": "Feels Like",
-            "humidity": "Humidity (%)",
             "ambient_pressure": "Pressure (hPa)",
             "wind_speed": "Wind (m/s)",
             "wind_deg": "Wind Dir (°)",
@@ -166,6 +168,8 @@ def _build_env_trends_chart(readings, colors, temp_pref="C"):
     temp = [_to_pref_temp(r.get("temperature"), temp_pref) for r in readings]
     humidity = [r.get("humidity") for r in readings]
 
+    # Standard metric order (legend): CO2, humidity, temp. The per-metric
+    # y-axis assignments (y/y2/y3) stay with their metrics.
     fig = go.Figure()
     fig.add_trace(
         go.Scatter(
@@ -175,19 +179,19 @@ def _build_env_trends_chart(readings, colors, temp_pref="C"):
     fig.add_trace(
         go.Scatter(
             x=timestamps,
-            y=temp,
-            name=f"Temp ({temp_unit})",
-            yaxis="y2",
-            line=dict(color="#42a5f5"),
+            y=humidity,
+            name="Humidity (%)",
+            yaxis="y3",
+            line=dict(color="#66bb6a"),
         )
     )
     fig.add_trace(
         go.Scatter(
             x=timestamps,
-            y=humidity,
-            name="Humidity (%)",
-            yaxis="y3",
-            line=dict(color="#66bb6a"),
+            y=temp,
+            name=f"Temp ({temp_unit})",
+            yaxis="y2",
+            line=dict(color="#42a5f5"),
         )
     )
 
@@ -599,20 +603,21 @@ def _build_env_trends(stats, readings, colors):
     """Environmental Trends sub-tab content."""
     pref = _temp_pref()
     unit = _temp_unit(pref)
+    # Standard metric order: CO2, humidity, temp
     with ui.row().classes("w-full gap-3 flex-wrap q-mb-md"):
         if stats:
             avg_temp = _to_pref_temp(stats.temp_mean, pref)
             temp_text = f"{avg_temp:.1f} {unit}" if avg_temp is not None else "--"
             _stat_card("Avg CO2", f"{stats.co2_mean:.0f} ppm", "co2", colors)
-            _stat_card("Avg Temp", temp_text, "thermostat", colors)
             _stat_card(
                 "Avg Humidity", f"{stats.humidity_mean:.1f}%", "water_drop", colors
             )
+            _stat_card("Avg Temp", temp_text, "thermostat", colors)
             _stat_card("Data Points", f"{stats.data_points:,}", "data_usage", colors)
         else:
             _stat_card("Avg CO2", "--", "co2", colors)
-            _stat_card("Avg Temp", "--", "thermostat", colors)
             _stat_card("Avg Humidity", "--", "water_drop", colors)
+            _stat_card("Avg Temp", "--", "thermostat", colors)
             _stat_card("Data Points", "0", "data_usage", colors)
 
     with ui.card().classes("w-full p-3"):
@@ -644,13 +649,20 @@ def _build_harvest_analysis(harvests, colors):
 
 
 def _build_daily_patterns(hourly, colors):
-    """Daily Patterns sub-tab content."""
+    """Daily Patterns sub-tab content. Standard metric order: CO2, humidity, temp."""
     with ui.row().classes("w-full gap-3 flex-wrap"):
         with ui.card().classes("flex-1 min-w-72 p-3"):
             ui.label("CO2 Hourly Pattern").classes(
                 "text-subtitle1 text-weight-bold q-mb-sm"
             )
             fig = _build_hourly_chart(hourly, "avg_co2", "CO2 (ppm)", "#ef5350")
+            ui.plotly(fig).classes("w-full").style("height: 300px")
+
+        with ui.card().classes("flex-1 min-w-72 p-3"):
+            ui.label("Humidity Hourly Pattern").classes(
+                "text-subtitle1 text-weight-bold q-mb-sm"
+            )
+            fig = _build_hourly_chart(hourly, "avg_humidity", "Humidity (%)", "#66bb6a")
             ui.plotly(fig).classes("w-full").style("height: 300px")
 
         with ui.card().classes("flex-1 min-w-72 p-3"):
@@ -665,13 +677,6 @@ def _build_daily_patterns(hourly, colors):
                 "#42a5f5",
                 value_transform=(lambda c: _to_pref_temp(c, pref)),
             )
-            ui.plotly(fig).classes("w-full").style("height: 300px")
-
-        with ui.card().classes("flex-1 min-w-72 p-3"):
-            ui.label("Humidity Hourly Pattern").classes(
-                "text-subtitle1 text-weight-bold q-mb-sm"
-            )
-            fig = _build_hourly_chart(hourly, "avg_humidity", "Humidity (%)", "#66bb6a")
             ui.plotly(fig).classes("w-full").style("height: 300px")
 
 
