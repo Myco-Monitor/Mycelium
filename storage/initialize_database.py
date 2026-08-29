@@ -82,7 +82,8 @@ def _column_exists(conn, table, column):
     PRAGMA/DDL; it is never user input — only the trusted constants in
     _COLUMN_ADDITIONS reach here.
     """
-    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    pragma = f"PRAGMA table_info({table})"
+    rows = conn.execute(pragma).fetchall()
     return any(r[1] == column for r in rows)
 
 
@@ -128,7 +129,8 @@ def apply_migrations(db_path):
         for table, column, decl in _COLUMN_ADDITIONS:
             if not _column_exists(conn, table, column):
                 print(f"Adding missing column {table}.{column}")
-                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+                ddl = f"ALTER TABLE {table} ADD COLUMN {column} {decl}"
+                conn.execute(ddl)
         conn.commit()
         return True
     except sqlite3.Error as e:

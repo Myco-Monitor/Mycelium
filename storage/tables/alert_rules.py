@@ -228,18 +228,12 @@ def update_rule(rule_id: int, **kwargs) -> bool:
     # Build SET clause. Column names are whitelisted above; values are parameterized.
     fields = ", ".join(f"{k} = ?" for k in kwargs)
     values = list(kwargs.values()) + [rule_id]
+    query = f"UPDATE alert_rules SET {fields}, updated_at = CURRENT_TIMESTAMP WHERE rule_id = ?"  # nosec B608  # columns whitelisted, values bound
 
     conn = get_connection()
     cursor = conn.cursor()
 
-    cursor.execute(
-        f"""
-        UPDATE alert_rules
-        SET {fields}, updated_at = CURRENT_TIMESTAMP
-        WHERE rule_id = ?
-    """,
-        values,
-    )
+    cursor.execute(query, values)
 
     conn.commit()
     updated = cursor.rowcount > 0

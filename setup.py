@@ -450,7 +450,7 @@ echo "Run 'python run.py' to start the application"
 
         # Make executable on Unix-like systems
         if os.name != "nt" and script_name.endswith(".sh"):
-            os.chmod(script_path, 0o755)
+            os.chmod(script_path, 0o755)  # nosec B103  # shell script must be executable
 
         print(f"✅ Created activation script: {script_name}")
         print(f"   You can run: source {script_name}")

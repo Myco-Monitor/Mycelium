@@ -52,7 +52,7 @@ def load_config():
             "name": "Mycelium Farm Monitor",
             "version": __version__,
             "debug": False,
-            "host": "0.0.0.0",
+            "host": "0.0.0.0",  # nosec B104  # LAN hub: must serve the whole network
             "port": 8051,
         }
     }
@@ -154,7 +154,7 @@ def check_prerequisites():
 
 
 def start_nicegui(
-    host="0.0.0.0",
+    host="0.0.0.0",  # nosec B104  # LAN hub: must serve the whole network
     port=8051,
     debug=False,
     dev=False,
@@ -310,7 +310,7 @@ def main():
     elif args.localhost:
         host = "127.0.0.1"
     else:
-        host = app_config.get("host", "0.0.0.0")
+        host = app_config.get("host", "0.0.0.0")  # nosec B104  # LAN default
     if args.port:
         port = args.port
     elif https:
