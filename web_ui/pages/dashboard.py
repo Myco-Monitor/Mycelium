@@ -17,10 +17,10 @@ from nicegui import ui, app
 from web_ui.layout import page_layout
 from web_ui.theme import get_colors
 
-# Spores poll ~every 60s. Smooth each sensor over its last few readings to damp
-# noise, and treat a sensor whose newest reading is older than the staleness
-# window (5 missed polls) as offline — its data is shown as dashes, not a number.
-SMOOTH_WINDOW = 5
+# Spores poll ~every 60s. Readings arrive already smoothed by the Spore's
+# on-device med3 + EMA filter, so the dashboard shows them as-is — no extra
+# averaging. A sensor whose newest reading is older than the staleness window
+# (5 missed polls) is treated as offline — its data is shown as dashes.
 STALE_AFTER_SECONDS = 300
 
 # A pressure reading older than this means the Hyphae isn't reporting, so we
@@ -394,12 +394,13 @@ def _get_tent_data() -> list:
 def _summarize_spores(spores: list) -> dict:
     """Average CO2 / humidity / temp across a tent's fresh Spores.
 
-    Each Spore is first smoothed over its last ``SMOOTH_WINDOW`` readings to damp
-    sensor noise, then the per-Spore values are averaged across the tent. A Spore
-    whose newest reading is older than ``STALE_AFTER_SECONDS`` is treated as
-    offline and excluded from the averages (its metrics show as dashes upstream).
-    Every Spore's newest reading is also captured as its snapshot for the card's
-    sensor column — same query, no extra reads.
+    Each Spore contributes its newest reading — already smoothed on-device by
+    the sensor pipeline's med3 + EMA filter — averaged across the tent with
+    equal weight per Spore. A Spore whose newest reading is older than
+    ``STALE_AFTER_SECONDS`` is treated as offline and excluded from the
+    averages (its metrics show as dashes upstream). The same reading doubles
+    as the Spore's snapshot for the card's sensor column, so the tent average
+    always matches the mean of the displayed snapshots.
 
     Returns a dict with:
       - ``co2`` / ``temp`` / ``humidity``: tent averages, or None if unavailable
@@ -428,7 +429,7 @@ def _summarize_spores(spores: list) -> dict:
 
         for spore in spores:
             name = spore.get("device_name") or f"Spore #{spore['device_id']}"
-            rows = get_device_readings(spore["device_id"], limit=SMOOTH_WINDOW)
+            rows = get_device_readings(spore["device_id"], limit=1)
             if not rows:
                 result["spores"].append(
                     {
@@ -442,7 +443,7 @@ def _summarize_spores(spores: list) -> dict:
                 )
                 continue
 
-            # rows are newest-first; row 0 doubles as the Spore's snapshot.
+            # rows[0] is the Spore's newest reading; it doubles as the snapshot.
             age = _reading_age_seconds(rows[0].get("reading_ts"))
             result["spores"].append(
                 {
@@ -457,13 +458,13 @@ def _summarize_spores(spores: list) -> dict:
             if age is None or age > STALE_AFTER_SECONDS:
                 continue
 
-            # Smooth each metric over this Spore's recent readings, then fold the
-            # per-Spore average into the tent totals (equal weight per Spore).
+            # Fold this Spore's newest reading into the tent totals (equal
+            # weight per Spore). No extra smoothing — readings are already
+            # filtered on-device (med3 + EMA).
             contributed = False
             for key in ("co2", "temp", "humidity"):
-                values = [float(r[key]) for r in rows if r.get(key) is not None]
-                if values:
-                    sums[key] += sum(values) / len(values)
+                if rows[0].get(key) is not None:
+                    sums[key] += float(rows[0][key])
                     counts[key] += 1
                     contributed = True
 
