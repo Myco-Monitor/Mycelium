@@ -25,8 +25,12 @@ logger = logging.getLogger("api.HubUpdateService")
 
 # Appliance layout (see Pi-Image). Overridable via env for testing.
 APP_DIR = os.environ.get("MYCELIUM_APP_DIR", "/opt/mycelium/app")
-UPDATER_SCRIPT = os.environ.get("MYCELIUM_UPDATER", "/usr/local/sbin/mycelium-update.sh")
-REQUEST_PATH = os.environ.get("MYCELIUM_UPDATE_REQUEST", "/run/mycelium/update-request.json")
+UPDATER_SCRIPT = os.environ.get(
+    "MYCELIUM_UPDATER", "/usr/local/sbin/mycelium-update.sh"
+)
+REQUEST_PATH = os.environ.get(
+    "MYCELIUM_UPDATE_REQUEST", "/run/mycelium/update-request.json"
+)
 
 _TAG_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
 
@@ -49,7 +53,9 @@ def _repo_url() -> str:
     this hub was built from (fork-safe, no hardcoded URL)."""
     out = subprocess.run(
         ["git", "-C", APP_DIR, "remote", "get-url", "origin"],
-        capture_output=True, text=True, timeout=10,
+        capture_output=True,
+        text=True,
+        timeout=10,
     )
     return out.stdout.strip()
 
@@ -64,13 +70,21 @@ def check_for_update() -> dict:
     try:
         url = _repo_url()
         if not url:
-            return {"current_version": current, "error": "no git origin on this install"}
+            return {
+                "current_version": current,
+                "error": "no git origin on this install",
+            }
         out = subprocess.run(
             ["git", "ls-remote", "--tags", "--refs", url, "v*"],
-            capture_output=True, text=True, timeout=25,
+            capture_output=True,
+            text=True,
+            timeout=25,
         )
         if out.returncode != 0:
-            return {"current_version": current, "error": (out.stderr or "ls-remote failed").strip()}
+            return {
+                "current_version": current,
+                "error": (out.stderr or "ls-remote failed").strip(),
+            }
 
         tags = []
         for line in out.stdout.splitlines():
@@ -79,8 +93,10 @@ def check_for_update() -> dict:
                 tags.append(name)
         if not tags:
             return {
-                "current_version": current, "latest_version": current,
-                "latest_ref": None, "update_available": False,
+                "current_version": current,
+                "latest_version": current,
+                "latest_ref": None,
+                "update_available": False,
             }
 
         latest_ref = max(tags, key=lambda t: _semver_tuple(t[1:]))
@@ -93,7 +109,10 @@ def check_for_update() -> dict:
             "update_available": update_available,
         }
     except subprocess.TimeoutExpired:
-        return {"current_version": current, "error": "timed out contacting the release server"}
+        return {
+            "current_version": current,
+            "error": "timed out contacting the release server",
+        }
     except Exception as e:  # noqa: BLE001 - surface any failure to the UI, don't crash
         logger.exception("check_for_update failed")
         return {"current_version": current, "error": str(e)}
@@ -121,7 +140,9 @@ def apply_update(ref: str) -> dict:
     try:
         proc = subprocess.run(
             ["sudo", "-n", UPDATER_SCRIPT],
-            capture_output=True, text=True, timeout=600,
+            capture_output=True,
+            text=True,
+            timeout=600,
         )
     except subprocess.TimeoutExpired:
         return {"result": "failed", "error": "update timed out"}
@@ -140,4 +161,7 @@ def apply_update(ref: str) -> dict:
         except json.JSONDecodeError:
             break
     detail = (proc.stderr or proc.stdout or "no output").strip()
-    return {"result": "failed", "error": f"updater returned no result (rc={proc.returncode}): {detail[:500]}"}
+    return {
+        "result": "failed",
+        "error": f"updater returned no result (rc={proc.returncode}): {detail[:500]}",
+    }

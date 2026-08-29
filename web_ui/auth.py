@@ -92,8 +92,10 @@ def login_page():
             # browser password managers offer to save/autofill the credentials.
             # NOTE: autocomplete must be set via .props() — the ui.input
             # autocomplete= kwarg is NiceGUI's word-suggestion datalist.
-            with ui.element("form").props('onsubmit="return false"').classes(
-                "full-width"
+            with (
+                ui.element("form")
+                .props('onsubmit="return false"')
+                .classes("full-width")
             ):
                 username = (
                     ui.input("Username", placeholder="Enter your username")
@@ -179,8 +181,10 @@ def signup_page():
             error_label = ui.label("").classes("text-negative q-mb-sm")
             error_label.set_visibility(False)
 
-            with ui.element("form").props('onsubmit="return false"').classes(
-                "full-width"
+            with (
+                ui.element("form")
+                .props('onsubmit="return false"')
+                .classes("full-width")
             ):
                 username = (
                     ui.input("Username", placeholder="Choose a username")

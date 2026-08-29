@@ -133,9 +133,7 @@ def user_admin_section(current_uid: int):
                     ui.notify(f"Deleted '{name}'.", type="positive")
                     user_admin_section.refresh()
 
-                async def _reset_password(
-                    target_id=uid_u, name=u.get("user_name", "")
-                ):
+                async def _reset_password(target_id=uid_u, name=u.get("user_name", "")):
                     with ui.dialog() as dlg, ui.card().classes("w-96"):
                         ui.label(f"Reset password for '{name}'").classes("text-h6")
                         ui.label(
@@ -369,8 +367,10 @@ def _hub_update_section(uid):
                 ).classes("text-caption text-muted")
                 # Form wrapper + hidden username let the browser autofill the
                 # saved Mycelium account password into this re-auth dialog.
-                with ui.element("form").props('onsubmit="return false"').classes(
-                    "w-full"
+                with (
+                    ui.element("form")
+                    .props('onsubmit="return false"')
+                    .classes("w-full")
                 ):
                     ui.html(
                         '<input type="text" name="username" '
@@ -488,9 +488,7 @@ def settings_page():
 
             # Form wrapper + hidden username make browsers offer to save the
             # updated password against this Mycelium install.
-            with ui.element("form").props('onsubmit="return false"').classes(
-                "w-full"
-            ):
+            with ui.element("form").props('onsubmit="return false"').classes("w-full"):
                 ui.html(
                     '<input type="text" name="username" autocomplete="username" '
                     f'value="{html_mod.escape(user_info.get("user_name", ""), quote=True)}" '

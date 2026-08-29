@@ -6,7 +6,12 @@ api/services/hub_update_service.py and Settings -> Hub Updates). Distinct from
 ota_history, which tracks Spore/Hyphae firmware.
 """
 
-from storage.db_utils import execute_query, execute_insert, execute_update, get_timestamp
+from storage.db_utils import (
+    execute_query,
+    execute_insert,
+    execute_update,
+    get_timestamp,
+)
 
 
 def record_update_start(from_version, from_ref, to_ref, initiated_by=None):
@@ -21,7 +26,9 @@ def record_update_start(from_version, from_ref, to_ref, initiated_by=None):
     )
 
 
-def record_update_result(update_id, status, to_version=None, to_sha=None, error_message=None):
+def record_update_result(
+    update_id, status, to_version=None, to_sha=None, error_message=None
+):
     """Finalize an update row with its outcome (success/failed/rolled_back)."""
     query = """
     UPDATE hub_update_history
