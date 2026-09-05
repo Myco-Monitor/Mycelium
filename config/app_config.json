@@ -20,6 +20,13 @@
       "max_backoff": 3600,
       "enabled": true
     },
+    "sentinel": {
+      "interval": 60,
+      "jitter": 5,
+      "backoff_factor": 2,
+      "max_backoff": 3600,
+      "enabled": true
+    },
     "weather": {
       "interval": 1800,
       "jitter": 60,

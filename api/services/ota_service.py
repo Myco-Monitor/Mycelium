@@ -1,7 +1,7 @@
 """
 OTA Firmware Update Service for Mycelium
 
-Orchestrates two-phase OTA uploads to Spore and Hyphae devices:
+Orchestrates two-phase OTA uploads to Spore, Hyphae and Sentinel devices:
 1. POST /api/ota/start-upload with PIN → returns upload token
 2. POST /api/ota/upload-stream with token + firmware binary
 3. Poll GET /api/ota/status for progress
@@ -18,7 +18,16 @@ import aiohttp
 
 from storage.tables.device_spore import get_device_spore
 from storage.tables.device_hyphae import get_device_hyphae
+from storage.tables.device_sentinel import get_device_sentinel
 from storage.tables.device_pins import get_device_pin, has_stored_pin
+
+# device_type -> row lookup. An unknown type resolves to no device rather than
+# silently falling through to another table's row with the same id.
+_DEVICE_LOOKUP = {
+    "spore": get_device_spore,
+    "hyphae": get_device_hyphae,
+    "sentinel": get_device_sentinel,
+}
 
 
 class OtaService:
@@ -31,10 +40,8 @@ class OtaService:
 
     def _get_device_url(self, device_id: int, device_type: str) -> Optional[str]:
         """Get the base URL for a device."""
-        if device_type == "spore":
-            device = get_device_spore(device_id)
-        else:
-            device = get_device_hyphae(device_id)
+        lookup = _DEVICE_LOOKUP.get(device_type)
+        device = lookup(device_id) if lookup else None
 
         if not device:
             return None

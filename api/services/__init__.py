@@ -7,6 +7,7 @@ transformation, and polling.
 
 from api.services.spore_service import SporeDataService
 from api.services.hyphae_service import HyphaeDataService
+from api.services.sentinel_service import SentinelDataService
 from api.services.weather_service import WeatherDataService
 from api.services.pressure_service import PressureDataService
 from api.services.polling_service import PollingService
@@ -29,6 +30,7 @@ from api.services.notification_service import NotificationService
 __all__ = [
     "SporeDataService",
     "HyphaeDataService",
+    "SentinelDataService",
     "WeatherDataService",
     "PressureDataService",
     "PollingService",

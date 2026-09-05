@@ -95,16 +95,18 @@ async def require_api_key(x_api_key: Optional[str] = Header(None, alias="X-API-K
 @api_router.get("/health")
 async def health_check():
     """Get system health status."""
-    from storage.tables import device_spore, device_hyphae
+    from storage.tables import device_spore, device_hyphae, device_sentinel
 
     spores = device_spore.get_all_device_spore(active_only=True)
     hyphaes = device_hyphae.get_all_device_hyphae(active_only=True)
+    sentinels = device_sentinel.get_all_device_sentinel(active_only=True)
 
     online_spores = sum(1 for d in spores if d.get("is_online"))
     online_hyphaes = sum(1 for d in hyphaes if d.get("is_online"))
+    online_sentinels = sum(1 for d in sentinels if d.get("is_online"))
 
-    total = len(spores) + len(hyphaes)
-    online = online_spores + online_hyphaes
+    total = len(spores) + len(hyphaes) + len(sentinels)
+    online = online_spores + online_hyphaes + online_sentinels
 
     if total == 0:
         status = "healthy"
@@ -121,6 +123,7 @@ async def health_check():
         "devices": {
             "spore": {"total": len(spores), "online": online_spores},
             "hyphae": {"total": len(hyphaes), "online": online_hyphaes},
+            "sentinel": {"total": len(sentinels), "online": online_sentinels},
         },
     }
 
@@ -136,7 +139,7 @@ async def list_devices(
     api_user=Depends(require_api_key),
 ):
     """List all devices."""
-    from storage.tables import device_spore, device_hyphae
+    from storage.tables import device_spore, device_hyphae, device_sentinel
 
     devices = []
 
@@ -164,7 +167,45 @@ async def list_devices(
             d["device_type"] = "hyphae"
             devices.append(d)
 
+    if type is None or type == "sentinel":
+        if farm_id:
+            sentinels = device_sentinel.get_devices_by_farm(farm_id)
+        elif room_id:
+            sentinels = device_sentinel.get_all_device_sentinel(room_id=room_id)
+        else:
+            sentinels = device_sentinel.get_all_device_sentinel()
+
+        for d in sentinels:
+            d["device_type"] = "sentinel"
+            devices.append(d)
+
     return {"devices": devices, "count": len(devices)}
+
+
+def _device_lookup(device_type: str):
+    """Row getter for a device type, or None for an unknown type."""
+    from storage.tables import device_spore, device_hyphae, device_sentinel
+
+    return {
+        "spore": device_spore.get_device_spore,
+        "hyphae": device_hyphae.get_device_hyphae,
+        "sentinel": device_sentinel.get_device_sentinel,
+    }.get(device_type)
+
+
+def _readings_module(device_type: str):
+    """Readings table module for a device type, or None for an unknown type.
+
+    All three modules expose get_device_readings() and get_latest_reading()
+    with the same signatures.
+    """
+    from storage.tables import readings_spore, readings_hyphae, readings_sentinel
+
+    return {
+        "spore": readings_spore,
+        "hyphae": readings_hyphae,
+        "sentinel": readings_sentinel,
+    }.get(device_type)
 
 
 @api_router.get("/devices/{device_type}/{device_id}")
@@ -172,15 +213,11 @@ async def get_device(
     device_type: str, device_id: int, api_user=Depends(require_api_key)
 ):
     """Get a single device by type and ID."""
-    from storage.tables import device_spore, device_hyphae
-
-    if device_type not in ("spore", "hyphae"):
+    lookup = _device_lookup(device_type)
+    if lookup is None:
         raise HTTPException(status_code=400, detail="Invalid device type")
 
-    if device_type == "spore":
-        device = device_spore.get_device_spore(device_id)
-    else:
-        device = device_hyphae.get_device_hyphae(device_id)
+    device = lookup(device_id)
 
     if not device:
         raise HTTPException(status_code=404, detail="Device not found")
@@ -202,21 +239,15 @@ async def get_readings(
     api_user=Depends(require_api_key),
 ):
     """Get historical readings for a device."""
-    from storage.tables import readings_spore, readings_hyphae
-
-    if device_type not in ("spore", "hyphae"):
+    module = _readings_module(device_type)
+    if module is None:
         raise HTTPException(status_code=400, detail="Invalid device type")
 
     limit = min(limit, 10000)
 
-    if device_type == "spore":
-        readings = readings_spore.get_device_readings(
-            device_id, limit=limit, start_ts=start, end_ts=end
-        )
-    else:
-        readings = readings_hyphae.get_device_readings(
-            device_id, limit=limit, start_ts=start, end_ts=end
-        )
+    readings = module.get_device_readings(
+        device_id, limit=limit, start_ts=start, end_ts=end
+    )
 
     return {
         "device_id": device_id,
@@ -231,15 +262,11 @@ async def get_latest_reading(
     device_type: str, device_id: int, api_user=Depends(require_api_key)
 ):
     """Get the most recent reading for a device."""
-    from storage.tables import readings_spore, readings_hyphae
-
-    if device_type not in ("spore", "hyphae"):
+    module = _readings_module(device_type)
+    if module is None:
         raise HTTPException(status_code=400, detail="Invalid device type")
 
-    if device_type == "spore":
-        reading = readings_spore.get_latest_reading(device_id)
-    else:
-        reading = readings_hyphae.get_latest_reading(device_id)
+    reading = module.get_latest_reading(device_id)
 
     if not reading:
         raise HTTPException(status_code=404, detail="No readings found")
@@ -266,7 +293,7 @@ async def list_rooms(farm_id: Optional[int] = None, api_user=Depends(require_api
 @api_router.get("/rooms/{room_id}")
 async def get_room(room_id: int, api_user=Depends(require_api_key)):
     """Get a single room."""
-    from storage.tables import grow_rooms, device_spore, device_hyphae
+    from storage.tables import grow_rooms, device_spore, device_hyphae, device_sentinel
 
     room = grow_rooms.get_grow_room(room_id)
     if not room:
@@ -274,8 +301,10 @@ async def get_room(room_id: int, api_user=Depends(require_api_key)):
 
     spores = device_spore.get_all_device_spore(room_id=room_id)
     hyphaes = device_hyphae.get_all_device_hyphae(room_id=room_id)
+    sentinels = device_sentinel.get_all_device_sentinel(room_id=room_id)
     room["spore_count"] = len(spores)
     room["hyphae_count"] = len(hyphaes)
+    room["sentinel_count"] = len(sentinels)
 
     return room
 

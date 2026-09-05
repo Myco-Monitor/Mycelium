@@ -1,8 +1,9 @@
 """
 Device Discovery and Registration Service for Mycelium
 
-Discovers Spore and Hyphae devices on the local network via mDNS
-(spore-NNNN.local / hyphae-NNNN.local) and registers them in the database.
+Discovers Spore, Hyphae and Sentinel devices on the local network via mDNS
+(spore-NNNN.local / hyphae-NNNN.local / sentinel-NNNN.local) and registers
+them in the database.
 
 Devices are reached by their mDNS hostname, not raw IP — the CSP TLS
 certificates are issued for the mDNS hostname (+ the AP-mode IP), so an
@@ -25,6 +26,11 @@ from storage.tables.device_hyphae import (
     get_device_hyphae_by_hostname,
     get_device_hyphae_by_mac,
 )
+from storage.tables.device_sentinel import (
+    create_device_sentinel,
+    get_device_sentinel_by_hostname,
+    get_device_sentinel_by_mac,
+)
 
 
 class DeviceDiscoveryService:
@@ -46,8 +52,8 @@ class DeviceDiscoveryService:
         """
         Discover MycoMonitor devices via mDNS.
 
-        Looks for spore-NNNN.local and hyphae-NNNN.local hostnames
-        using the zeroconf library.
+        Looks for spore-NNNN.local, hyphae-NNNN.local and sentinel-NNNN.local
+        hostnames using the zeroconf library.
 
         Args:
             timeout: How long to listen for mDNS responses (seconds).
@@ -68,18 +74,21 @@ class DeviceDiscoveryService:
                 info = zc.get_service_info(type_, name)
                 if info is None:
                     return
-                # The spore-NNNN / hyphae-NNNN identity is the mDNS HOSTNAME
-                # (A record), exposed as info.server -- NOT the service instance
-                # name, which the firmware sets to a generic label
-                # ("Myco-Monitor Spore" / "Myco-Monitor Hyphae"). Parsing the
-                # instance name here would reject every real device.
+                # The spore-NNNN / hyphae-NNNN / sentinel-NNNN identity is the
+                # mDNS HOSTNAME (A record), exposed as info.server -- NOT the
+                # service instance name, which the firmware sets to a generic
+                # label ("Myco-Monitor Spore" / "Myco-Monitor Hyphae" /
+                # "Myco-Monitor Sentinel"). Parsing the instance name here
+                # would reject every real device.
                 server = (info.server or "").rstrip(".")  # e.g. "spore-1234.local"
                 label = server.split(".")[0]  # e.g. "spore-1234"
-                # Match spore-NNNN or hyphae-NNNN (case-insensitive)
+                # Match spore-NNNN, hyphae-NNNN or sentinel-NNNN (case-insensitive)
                 if re.match(r"spore-\d{4}$", label, re.IGNORECASE):
                     device_type = "spore"
                 elif re.match(r"hyphae-\d{4}$", label, re.IGNORECASE):
                     device_type = "hyphae"
+                elif re.match(r"sentinel-\d{4}$", label, re.IGNORECASE):
+                    device_type = "sentinel"
                 else:
                     return
 
@@ -127,7 +136,7 @@ class DeviceDiscoveryService:
         Returns:
             Dict[str, List[int]]: Dictionary of registered device IDs by device type
         """
-        registered_devices = {"spore": [], "hyphae": []}
+        registered_devices = {"spore": [], "hyphae": [], "sentinel": []}
 
         for device in devices.values():
             device_type = device.get("device_type")
@@ -140,6 +149,10 @@ class DeviceDiscoveryService:
                 device_id = await self._register_hyphae_device(device, room_id)
                 if device_id:
                     registered_devices["hyphae"].append(device_id)
+            elif device_type == "sentinel":
+                device_id = await self._register_sentinel_device(device, room_id)
+                if device_id:
+                    registered_devices["sentinel"].append(device_id)
 
         return registered_devices
 
@@ -245,6 +258,57 @@ class DeviceDiscoveryService:
             return device_id
         except Exception as e:
             self.logger.error(f"Error registering Hyphae device: {e}")
+            return None
+
+    async def _register_sentinel_device(
+        self, device: Dict[str, Any], room_id: Optional[int]
+    ) -> Optional[int]:
+        """
+        Register a Sentinel device in the database.
+
+        Args:
+            device (Dict[str, Any]): Device information
+            room_id (int, optional): Room to associate the device with; a
+                Sentinel usually sits outside the tents, so None is allowed
+
+        Returns:
+            Optional[int]: ID of the registered device, or None if registration failed
+        """
+        try:
+            hostname = device["hostname"]
+            mac_address = device.get("mac_address", "")
+            device_name = device.get("device_name", hostname)
+            firmware_version = device.get("firmware_version", "")
+
+            existing_device = None
+            if mac_address:
+                existing_device = get_device_sentinel_by_mac(mac_address)
+
+            if not existing_device:
+                existing_device = get_device_sentinel_by_hostname(hostname)
+
+            if existing_device:
+                self.logger.info(
+                    f"Sentinel device already registered: {device_name} ({hostname})"
+                )
+                return existing_device["device_id"]
+
+            device_id = create_device_sentinel(
+                device_name=device_name,
+                hostname=hostname,
+                mac_address=mac_address,
+                room_id=room_id,
+                firmware_version=firmware_version,
+                is_online=1,
+            )
+
+            self.logger.info(
+                f"Registered Sentinel device: {device_name} ({hostname}) with ID {device_id}"
+            )
+
+            return device_id
+        except Exception as e:
+            self.logger.error(f"Error registering Sentinel device: {e}")
             return None
 
     async def link_spore_to_hyphae(self, spore_id: int, hyphae_id: int) -> bool:

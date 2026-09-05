@@ -33,7 +33,26 @@ from storage.tables.device_hyphae import (
     update_device_status as update_hyphae_status,
     set_device_online as set_hyphae_online,
 )
+from storage.tables.device_sentinel import (
+    get_all_device_sentinel,
+    update_device_status as update_sentinel_status,
+    set_device_online as set_sentinel_online,
+)
 from storage.tables.device_health import log_health_check
+from api.services.sentinel_service import SentinelDataService
+
+# Polling defaults for device types added after a hub's app_config.json was
+# written; merged in so an older config file never leaves a loop without a key
+# (the status/backoff helpers index polling_config[device_type] unguarded).
+_POLLING_DEFAULTS = {
+    "sentinel": {
+        "interval": 60,
+        "jitter": 5,
+        "backoff_factor": 2,
+        "max_backoff": 3600,
+        "enabled": True,
+    },
+}
 
 # Refresh the diagnostics snapshot (RSSI, heap, uptime) every Nth successful
 # poll (~5 min at the default 60s interval) instead of on every poll — TLS
@@ -59,6 +78,7 @@ class PollingService:
         # Initialize services
         self.spore_service = SporeDataService()
         self.hyphae_service = HyphaeDataService()
+        self.sentinel_service = SentinelDataService()
         self.weather_service = WeatherDataService()
         self.pressure_service = PressureDataService()
         self.pressure_distribution = PressureDistributionService()
@@ -84,6 +104,13 @@ class PollingService:
                         "enabled": True,
                     },
                     "hyphae": {
+                        "interval": 60,
+                        "jitter": 5,
+                        "backoff_factor": 2,
+                        "max_backoff": 3600,
+                        "enabled": True,
+                    },
+                    "sentinel": {
                         "interval": 60,
                         "jitter": 5,
                         "backoff_factor": 2,
@@ -124,6 +151,13 @@ class PollingService:
                     "max_backoff": 3600,
                     "enabled": True,
                 },
+                "sentinel": {
+                    "interval": 60,
+                    "jitter": 5,
+                    "backoff_factor": 2,
+                    "max_backoff": 3600,
+                    "enabled": True,
+                },
                 "weather": {
                     "interval": 1800,
                     "jitter": 60,
@@ -141,10 +175,14 @@ class PollingService:
                 "alerts": {"interval": 60, "jitter": 5, "enabled": True},
             }
 
+        for device_type, defaults in _POLLING_DEFAULTS.items():
+            self.polling_config.setdefault(device_type, dict(defaults))
+
         # Device status tracking
         self.device_status = {
             "spore": {},  # device_id -> {"online": bool, "last_success": datetime, "failures": int, "next_poll": datetime}
             "hyphae": {},
+            "sentinel": {},
             "weather": {},
             "pressure": {},
         }
@@ -171,6 +209,11 @@ class PollingService:
         if self.polling_config["hyphae"]["enabled"]:
             self.polling_tasks["hyphae"] = asyncio.create_task(
                 self._poll_hyphae_devices()
+            )
+
+        if self.polling_config["sentinel"]["enabled"]:
+            self.polling_tasks["sentinel"] = asyncio.create_task(
+                self._poll_sentinel_devices()
             )
 
         if self.polling_config["weather"]["enabled"]:
@@ -212,7 +255,7 @@ class PollingService:
         Configure polling for a device type.
 
         Args:
-            device_type (str): Type of device ("spore", "hyphae", "weather")
+            device_type (str): Type of device ("spore", "hyphae", "sentinel", "weather")
             config (Dict[str, Any]): Polling configuration
         """
         if device_type not in self.polling_config:
@@ -320,6 +363,72 @@ class PollingService:
                 self.logger.error(f"Error in Spore polling loop: {e}")
 
                 # Sleep for a short time before retrying
+                await asyncio.sleep(5)
+
+    async def _poll_sentinel_devices(self):
+        """Poll all Sentinel devices for data.
+
+        Same shape as the Spore loop. The firmware version rides along with
+        every reading (Sentinel has no /api/status), so there is no separate
+        version refresh on reconnect; the data service records it itself.
+        """
+        self.logger.info("Starting Sentinel device polling")
+
+        while self.running:
+            try:
+                devices = get_all_device_sentinel()
+
+                for device in devices:
+                    device_id = device["device_id"]
+
+                    if not self._should_poll_device("sentinel", device_id):
+                        continue
+
+                    try:
+                        self.logger.debug(f"Polling Sentinel device {device_id}")
+
+                        if device_id not in self.sentinel_service.clients:
+                            await self.sentinel_service.initialize_client(device_id)
+
+                        was_online = (
+                            self.device_status["sentinel"]
+                            .get(device_id, {})
+                            .get("online", False)
+                        )
+
+                        # Get the latest reading (raises on transport failure)
+                        poll_start = time.monotonic()
+                        await self.sentinel_service.get_latest_reading(device_id)
+                        elapsed_ms = int((time.monotonic() - poll_start) * 1000)
+
+                        self._update_device_status(
+                            "sentinel", device_id, True, response_time_ms=elapsed_ms
+                        )
+
+                        # Diagnostics snapshot every Nth poll and immediately on
+                        # reconnection, as for Spores. Never raises.
+                        status = self.device_status["sentinel"][device_id]
+                        polls_since_diag = status.get(
+                            "polls_since_diag", DIAG_EVERY_N_POLLS
+                        )
+                        if not was_online or polls_since_diag >= DIAG_EVERY_N_POLLS:
+                            await self.sentinel_service.refresh_diagnostics(device_id)
+                            status["polls_since_diag"] = 0
+                        else:
+                            status["polls_since_diag"] = polls_since_diag + 1
+
+                        self.logger.debug(
+                            f"Successfully polled Sentinel device {device_id}"
+                        )
+                    except Exception as e:
+                        self.logger.error(
+                            f"Error polling Sentinel device {device_id}: {e}"
+                        )
+                        self._update_device_status("sentinel", device_id, False, e)
+
+                await asyncio.sleep(self._get_polling_interval("sentinel"))
+            except Exception as e:
+                self.logger.error(f"Error in Sentinel polling loop: {e}")
                 await asyncio.sleep(5)
 
     async def _poll_hyphae_devices(self):
@@ -636,6 +745,8 @@ class PollingService:
                 update_spore_status(device_id, 1)
             elif device_type == "hyphae":
                 update_hyphae_status(device_id, 1)
+            elif device_type == "sentinel":
+                update_sentinel_status(device_id, 1)
 
         def _mark_offline():
             # Preserve last_update so "Last Seen" stays the last reachable time.
@@ -643,6 +754,8 @@ class PollingService:
                 set_spore_online(device_id, 0)
             elif device_type == "hyphae":
                 set_hyphae_online(device_id, 0)
+            elif device_type == "sentinel":
+                set_sentinel_online(device_id, 0)
 
         if success:
             status["online"] = True
@@ -691,7 +804,7 @@ class PollingService:
         # response-time metrics. Raw, not grace-adjusted: the log is a record
         # of actual checks; the mDNS grace window only governs the displayed
         # online flag. Weather/pressure share this funnel but aren't devices.
-        if device_type in ("spore", "hyphae"):
+        if device_type in ("spore", "hyphae", "sentinel"):
             try:
                 log_health_check(
                     device_id,

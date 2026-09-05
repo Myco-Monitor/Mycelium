@@ -10,8 +10,32 @@ from typing import Optional, Dict, Any, List
 from dataclasses import dataclass
 
 from storage.tables import alert_rules, alert_history
-from storage.tables import device_spore, device_hyphae
-from storage.tables import readings_spore
+from storage.tables import device_spore, device_hyphae, device_sentinel
+from storage.tables import readings_spore, readings_sentinel
+
+# Threshold rules apply to sensor devices only. Per device type: rule metric
+# name -> column in that type's readings table. A metric missing for a type
+# means the type doesn't measure it, so the rule silently skips those devices.
+_METRIC_FIELDS = {
+    "spore": {"co2": "co2", "temperature": "temp", "humidity": "humidity"},
+    "sentinel": {
+        "co2": "co2",
+        "temperature": "temp",
+        "humidity": "humidity",
+        "pm2_5": "pm2_5",
+        "voc": "voc",
+        "nox": "nox",
+    },
+}
+_READINGS_MODULES = {"spore": readings_spore, "sentinel": readings_sentinel}
+_METRIC_LABELS = {
+    "co2": "CO2",
+    "temperature": "Temperature",
+    "humidity": "Humidity",
+    "pm2_5": "PM2.5",
+    "voc": "VOC index",
+    "nox": "NOx index",
+}
 
 
 logger = logging.getLogger("services.AlertService")
@@ -163,12 +187,15 @@ class AlertService:
         if not metric or threshold is None:
             return triggers
 
-        # Only applies to Spore devices (they have sensor data)
+        # Only applies to sensor devices: Spores and Sentinels. A metric the
+        # device type doesn't measure (e.g. PM2.5 on a Spore) reads as None
+        # and is skipped, so an "all types" rule spans both without noise.
         devices = self._get_devices_for_rule(rule)
-        spore_devices = [d for d in devices if d.get("device_type") == "spore"]
+        sensor_devices = [d for d in devices if d.get("device_type") in _METRIC_FIELDS]
 
-        for device in spore_devices:
-            reading = self._get_latest_reading(device["device_id"], metric)
+        for device in sensor_devices:
+            device_type = device["device_type"]
+            reading = self._get_latest_reading(device["device_id"], metric, device_type)
             if reading is None:
                 continue
 
@@ -179,12 +206,13 @@ class AlertService:
                     rule["rule_id"], device["device_id"]
                 ):
                     direction = "above" if is_high else "below"
-                    message = f"{metric.upper()} {direction} threshold on {device['device_name']}: {reading:.1f} (limit: {threshold})"
+                    label = _METRIC_LABELS.get(metric, metric.upper())
+                    message = f"{label} {direction} threshold on {device['device_name']}: {reading:.1f} (limit: {threshold})"
 
                     alert_history.create_alert(
                         rule_id=rule["rule_id"],
                         device_id=device["device_id"],
-                        device_type="spore",
+                        device_type=device_type,
                         alert_message=message,
                         alert_value=reading,
                     )
@@ -195,7 +223,7 @@ class AlertService:
                             rule_name=rule["rule_name"],
                             rule_type=rule["rule_type"],
                             device_id=device["device_id"],
-                            device_type="spore",
+                            device_type=device_type,
                             device_name=device["device_name"],
                             message=message,
                             value=reading,
@@ -347,30 +375,45 @@ class AlertService:
                 d["device_type"] = "hyphae"
                 devices.append(d)
 
+        # Get Sentinel devices
+        if rule_device_type is None or rule_device_type == "sentinel":
+            sentinel_devices = device_sentinel.get_all_devices(active_only=True)
+            for d in sentinel_devices:
+                # Apply filters
+                if rule_device_id and d["device_id"] != rule_device_id:
+                    continue
+                if rule_room_id and d.get("room_id") != rule_room_id:
+                    continue
+                d["device_type"] = "sentinel"
+                devices.append(d)
+
         return devices
 
-    def _get_latest_reading(self, device_id: int, metric: str) -> Optional[float]:
+    def _get_latest_reading(
+        self, device_id: int, metric: str, device_type: str = "spore"
+    ) -> Optional[float]:
         """
-        Get latest sensor reading for a metric.
+        Get the latest stored value of a metric for a sensor device.
 
         Args:
-            device_id: Spore device ID
-            metric: 'co2', 'temperature', or 'humidity'
+            device_id: Device ID
+            metric: rule metric name ('co2', 'temperature', 'humidity', and for
+                Sentinels also 'pm2_5', 'voc', 'nox')
+            device_type: 'spore' or 'sentinel'
 
         Returns:
-            Latest value or None
+            Latest value, or None when the device type has no such metric, has
+            no readings, or the channel was unavailable in its latest reading
         """
-        latest = readings_spore.get_latest_reading(device_id)
-        if not latest:
+        module = _READINGS_MODULES.get(device_type)
+        field = _METRIC_FIELDS.get(device_type, {}).get(metric)
+        if module is None or field is None:
             return None
 
-        metric_map = {"co2": "co2", "temperature": "temp", "humidity": "humidity"}
-
-        field = metric_map.get(metric)
-        if field:
-            return latest.get(field)
-
-        return None
+        latest = module.get_latest_reading(device_id)
+        if not latest:
+            return None
+        return latest.get(field)
 
     # Alert management methods
 
