@@ -13,7 +13,7 @@ from web_ui.layout import page_layout, back_to_dashboard
 from web_ui.theme import get_colors
 
 from api.services.alert_service import AlertService
-from storage.tables import device_spore, device_hyphae, grow_rooms
+from storage.tables import device_spore, device_hyphae, device_sentinel, grow_rooms
 
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -157,7 +157,41 @@ def _get_device_options() -> dict:
             options[key] = f"[Hyphae] {d.get('device_name', d.get('device_id'))}"
     except Exception:
         pass
+    try:
+        for d in device_sentinel.get_all_device_sentinel(active_only=True):
+            key = f"sentinel:{d['device_id']}"
+            options[key] = f"[Sentinel] {d.get('device_name', d.get('device_id'))}"
+    except Exception:
+        pass
     return options
+
+
+# Threshold metrics by device type. The base trio follows the standard
+# CO2 / humidity / temp order; the air-quality metrics exist on Sentinels only.
+_BASE_METRICS = {
+    "co2": "CO2 (ppm)",
+    "humidity": "Humidity (%)",
+    "temperature": "Temperature",
+}
+_SENTINEL_METRICS = {
+    "pm2_5": "PM2.5 (µg/m³)",
+    "voc": "VOC Index",
+    "nox": "NOx Index",
+}
+
+
+def _metric_options(device_type) -> dict:
+    """Metric choices for a threshold rule targeting `device_type`.
+
+    Sentinel rules lead with the air-quality metrics; an "all device types"
+    rule offers everything (a metric a device can't measure is skipped by the
+    alert service); Spore/Hyphae rules keep the base trio.
+    """
+    if device_type == "sentinel":
+        return {**_SENTINEL_METRICS, **_BASE_METRICS}
+    if not device_type:
+        return {**_BASE_METRICS, **_SENTINEL_METRICS}
+    return dict(_BASE_METRICS)
 
 
 def _get_room_options() -> dict:
@@ -596,6 +630,7 @@ def _open_add_rule_dialog(alert_service: AlertService, colors: dict):
                     "": "All Device Types",
                     "spore": "Spore (Sensors)",
                     "hyphae": "Hyphae (Controllers)",
+                    "sentinel": "Sentinel (Air Quality)",
                 },
                 value="",
             ).classes("w-full")
@@ -624,13 +659,17 @@ def _open_add_rule_dialog(alert_service: AlertService, colors: dict):
             ):
                 metric_select = ui.select(
                     label="Metric",
-                    options={
-                        "co2": "CO2 (ppm)",
-                        "temperature": "Temperature",
-                        "humidity": "Humidity (%)",
-                    },
+                    options=_metric_options(device_type_select.value),
                     value="co2",
                 ).classes("w-full")
+
+                def _sync_metric_options(_e=None):
+                    metric_select.options = _metric_options(device_type_select.value)
+                    if metric_select.value not in metric_select.options:
+                        metric_select.value = "co2"
+                    metric_select.update()
+
+                device_type_select.on("update:model-value", _sync_metric_options)
 
                 threshold_input = ui.number(
                     label="Threshold Value",
@@ -793,14 +832,11 @@ def _open_edit_rule_dialog(rule: dict, alert_service: AlertService, colors: dict
                     backward=lambda v: v in ("threshold_high", "threshold_low"),
                 )
             ):
-                # Standard metric order: CO2, humidity, temp
+                # Metric choices follow the rule's device type (the edit dialog
+                # keeps the type fixed); standard order CO2, humidity, temp.
                 metric_select = ui.select(
                     label="Metric",
-                    options={
-                        "co2": "CO2 (ppm)",
-                        "humidity": "Humidity (%)",
-                        "temperature": "Temperature",
-                    },
+                    options=_metric_options(rule.get("device_type") or ""),
                     value=rule.get("metric", "co2"),
                 ).classes("w-full")
 

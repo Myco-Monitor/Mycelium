@@ -10,10 +10,45 @@ naive inputs are therefore interpreted as UTC and converted to the user's
 timezone for display.
 """
 
+import math
 from datetime import datetime, timezone
+from typing import Optional, Tuple
 from zoneinfo import ZoneInfo
 
 from nicegui import app
+
+# EPA 2024 PM2.5 AQI breakpoints (24-hour, ug/m3, value truncated to one
+# decimal): (upper bound, band label, chip background, chip text colour).
+# Colours match the chip on the Sentinel's own /sentinel-data page so hub and
+# device always agree on the band.
+PM25_AQI_BANDS = (
+    (9.0, "Good", "#00e400", "#111111"),
+    (35.4, "Moderate", "#ffff00", "#111111"),
+    (55.4, "Unhealthy for Sensitive Groups", "#ff7e00", "#111111"),
+    (125.4, "Unhealthy", "#ff0000", "#ffffff"),
+    (225.4, "Very Unhealthy", "#8f3f97", "#ffffff"),
+    (math.inf, "Hazardous", "#7e0023", "#ffffff"),
+)
+
+
+def pm25_aqi_band(pm25) -> Optional[Tuple[str, str, str]]:
+    """Return (label, background, foreground) for a PM2.5 reading in ug/m3.
+
+    None when the value is missing or not numeric (a Sentinel reports null
+    for a channel that is unavailable).
+    """
+    try:
+        value = float(pm25)
+    except (TypeError, ValueError):
+        return None
+    if math.isnan(value) or value < 0:
+        return None
+    value = math.floor(value * 10) / 10  # EPA truncates to one decimal
+    for upper, label, bg, fg in PM25_AQI_BANDS:
+        if value <= upper:
+            return label, bg, fg
+    return None
+
 
 # Older settings stored legacy tzdata aliases; Debian trixie ships those only
 # in the optional tzdata-legacy package, so map them to canonical IANA names.

@@ -52,10 +52,13 @@ def _health_summary(colors: dict):
     """Summary cards for overall fleet health."""
     from storage.tables.device_spore import get_all_device_spore
     from storage.tables.device_hyphae import get_all_device_hyphae
+    from storage.tables.device_sentinel import get_all_device_sentinel
 
-    spores = get_all_device_spore()
-    hyphae = get_all_device_hyphae()
-    all_devices = [(d, "spore") for d in spores] + [(d, "hyphae") for d in hyphae]
+    all_devices = (
+        [(d, "spore") for d in get_all_device_spore()]
+        + [(d, "hyphae") for d in get_all_device_hyphae()]
+        + [(d, "sentinel") for d in get_all_device_sentinel()]
+    )
 
     total = len(all_devices)
     online = sum(1 for d, _ in all_devices if d.get("is_online"))
@@ -92,16 +95,19 @@ def health_grid():
     """Grid of device health cards."""
     from storage.tables.device_spore import get_all_device_spore
     from storage.tables.device_hyphae import get_all_device_hyphae
+    from storage.tables.device_sentinel import get_all_device_sentinel
     from storage.tables.device_health import (
         get_all_devices_health_summary,
         get_device_health_metrics,
     )
 
     colors = get_colors()
-    spores = get_all_device_spore()
-    hyphae = get_all_device_hyphae()
 
-    all_devices = [(d, "spore") for d in spores] + [(d, "hyphae") for d in hyphae]
+    all_devices = (
+        [(d, "spore") for d in get_all_device_spore()]
+        + [(d, "hyphae") for d in get_all_device_hyphae()]
+        + [(d, "sentinel") for d in get_all_device_sentinel()]
+    )
 
     if not all_devices:
         ui.label("No devices registered").classes("text-muted text-center q-pa-lg")
@@ -164,7 +170,11 @@ def _device_health_card(
         # Header: name + status badge
         with ui.row().classes("w-full items-center justify-between q-mb-sm"):
             with ui.row().classes("items-center gap-2"):
-                icon = "sensors" if dtype == "spore" else "device_hub"
+                icon = {
+                    "spore": "sensors",
+                    "hyphae": "device_hub",
+                    "sentinel": "air",
+                }.get(dtype, "devices")
                 ui.icon(icon, size="xs").style(f"color: {colors['primary']}")
                 ui.label(name).classes("text-subtitle1 text-weight-bold")
             ui.badge(status_text).style(

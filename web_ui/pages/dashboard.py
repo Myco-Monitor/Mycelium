@@ -4,7 +4,8 @@ Main dashboard page for Mycelium NiceGUI application.
 Provides a live, high-level overview of the farm: device online/offline
 status, active alerts, per-tent environment (each Hyphae and its linked
 Spores: averaged CO2 / humidity / temp, barometric pressure, and per-Spore
-snapshots), and local weather.
+snapshots), the grower's own air (one card per Sentinel air-quality
+monitor), and local weather.
 
 Display convention: environment metrics always appear in the order
 CO2, humidity, temperature — everywhere in the UI — so values line up
@@ -16,6 +17,7 @@ from datetime import datetime, timezone
 from nicegui import ui, app
 from web_ui.layout import page_layout
 from web_ui.theme import get_colors
+from web_ui.format import pm25_aqi_band
 
 # Spores poll ~every 60s. Readings arrive already smoothed by the Spore's
 # on-device med3 + EMA filter, so the dashboard shows them as-is — no extra
@@ -54,10 +56,14 @@ def dashboard_page():
         # Per-tent environment cards (refreshable)
         tent_environment()
 
-        # Auto-refresh stats + tent environment every 30 seconds
+        # Grower-environment cards, one per Sentinel (refreshable)
+        sentinel_environment()
+
+        # Auto-refresh stats + environment cards every 30 seconds
         def _refresh_live():
             dashboard_stats.refresh()
             tent_environment.refresh()
+            sentinel_environment.refresh()
 
         ui.timer(30.0, _refresh_live)
 
@@ -277,6 +283,88 @@ def _tent_snapshot_col(tent: dict, temp_pref: str):
                 )
 
 
+@ui.refreshable
+def sentinel_environment():
+    """Grower-environment cards: one per Sentinel air-quality monitor.
+
+    A Sentinel sits outside the tents and reports the air the grower breathes
+    (PM, VOC/NOx indices, CO2, humidity, temp, pressure), so it gets its own
+    section rather than a place in a tent card.
+    """
+    colors = get_colors()
+    sentinels = _get_sentinel_data()
+    if not sentinels:
+        return
+
+    ui.label("Grower Environment").classes("text-h5 q-mt-md q-mb-sm")
+    temp_pref = _temp_pref()
+    for sentinel in sentinels:
+        _sentinel_card(sentinel, temp_pref, colors)
+
+
+def _sentinel_card(sentinel: dict, temp_pref: str, colors: dict):
+    """Render one Sentinel's latest stored reading as a full-width card."""
+    reading = sentinel["reading"]
+    with ui.card().classes("w-full p-4"):
+        with ui.row().classes("items-center gap-2 q-mb-sm"):
+            ui.icon("air", size="sm").style(f"color: {colors['primary']}")
+            ui.label(sentinel["name"]).classes("text-subtitle1 text-weight-bold")
+            ui.label(sentinel["room_caption"]).classes("text-caption text-muted")
+
+        if not sentinel["has_data"]:
+            ui.label("No readings yet — waiting for the first poll").classes(
+                "text-caption text-muted"
+            )
+            return
+
+        temp_value, temp_unit = _fmt_temp(reading.get("temp"), temp_pref)
+        with ui.row().classes("w-full justify-around flex-wrap"):
+            # PM2.5 leads, with its EPA AQI band underneath
+            with ui.column().classes("items-center gap-0"):
+                ui.icon("air", size="xs").classes("text-muted")
+                ui.label(_fmt_metric(reading.get("pm2_5"), " µg/m³", 1)).classes(
+                    "text-weight-bold"
+                )
+                ui.label("PM2.5").classes("text-caption text-muted")
+                _aqi_label(reading.get("pm2_5"))
+            _env_stat("science", "VOC", _fmt_metric(reading.get("voc"), "", 0))
+            _env_stat("science", "NOx", _fmt_metric(reading.get("nox"), "", 0))
+            # Standard metric order: CO2, humidity, temp (then pressure)
+            _env_stat("co2", "CO₂", _fmt_metric(reading.get("co2"), " ppm", 0))
+            _env_stat(
+                "water_drop", "Humidity", _fmt_metric(reading.get("humidity"), "%", 0)
+            )
+            _env_stat("thermostat", "Temp", _fmt_unit(temp_value, f"°{temp_unit}"))
+            _env_stat(
+                "speed", "Pressure", _fmt_metric(reading.get("pressure_hpa"), " hPa", 1)
+            )
+
+        # Values stay visible when stale — the age caption says how old they
+        # are, going red once the Sentinel stops reporting (as for tent snapshots).
+        age = sentinel["age_seconds"]
+        stale = age is None or age > STALE_AFTER_SECONDS
+        ui.label(f"Updated {_humanize_age(age)}").classes(
+            "text-caption text-negative q-mt-sm"
+            if stale
+            else "text-caption text-muted q-mt-sm"
+        )
+
+
+def _aqi_label(pm25) -> None:
+    """EPA AQI band chip for a PM2.5 value; renders nothing when unavailable.
+
+    A styled label rather than ui.badge: an inline background-color on a
+    badge loses to Quasar's `bg-primary !important` class.
+    """
+    band = pm25_aqi_band(pm25)
+    if band is None:
+        return
+    label, bg, fg = band
+    ui.label(label).classes("text-caption text-weight-bold q-px-sm").style(
+        f"background-color: {bg}; color: {fg}; border-radius: 12px;"
+    )
+
+
 def _env_stat(icon: str, label: str, value: str):
     """Small environment stat cell inside a room card."""
     with ui.column().classes("items-center gap-0"):
@@ -315,16 +403,47 @@ def _nav_card(title: str, description: str, icon: str, href: str, colors: dict):
 
 
 def _get_device_status_counts() -> tuple:
-    """Return (online, offline) counts across all active Spore and Hyphae devices."""
+    """Return (online, offline) counts across all active devices of every type."""
     try:
         from storage.tables.device_spore import get_all_device_spore
         from storage.tables.device_hyphae import get_all_device_hyphae
+        from storage.tables.device_sentinel import get_all_device_sentinel
 
-        devices = list(get_all_device_spore()) + list(get_all_device_hyphae())
+        devices = (
+            list(get_all_device_spore())
+            + list(get_all_device_hyphae())
+            + list(get_all_device_sentinel())
+        )
         online = sum(1 for d in devices if d.get("is_online"))
         return online, len(devices) - online
     except Exception:
         return 0, 0
+
+
+def _get_sentinel_data() -> list:
+    """One entry per Sentinel: its latest stored reading plus that reading's age."""
+    result = []
+    try:
+        from storage.tables.device_sentinel import get_all_device_sentinel
+        from storage.tables.readings_sentinel import get_latest_reading
+
+        for device in get_all_device_sentinel():
+            row = get_latest_reading(device["device_id"]) or {}
+            result.append(
+                {
+                    "name": device.get("device_name")
+                    or f"Sentinel #{device['device_id']}",
+                    "room_caption": device.get("room_name") or "Grower space",
+                    "has_data": bool(row),
+                    "age_seconds": _reading_age_seconds(row.get("reading_ts"))
+                    if row
+                    else None,
+                    "reading": row,
+                }
+            )
+    except Exception:
+        return []
+    return result
 
 
 def _get_alert_count() -> int:

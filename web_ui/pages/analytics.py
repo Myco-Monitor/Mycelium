@@ -23,8 +23,10 @@ from storage.tables import (
     readings_hyphae,
     readings_pressure,
     readings_weather,
+    readings_sentinel,
     device_spore,
     device_hyphae,
+    device_sentinel,
 )
 
 logger = logging.getLogger("web_ui.analytics")
@@ -34,14 +36,14 @@ logger = logging.getLogger("web_ui.analytics")
 # One entry per readings table, mapping it to its storage module, the device
 # list it is keyed to, and the numeric columns worth graphing. Both the Graph
 # Builder and Records panels drive off this so there is a single code path
-# instead of four near-duplicates.
+# instead of five near-duplicates.
 #
 # Call convention: get_device_readings / delete_device_readings take the device
-# id as the FIRST POSITIONAL arg in every module (spore/weather/hyphae name it
-# device_id, pressure names it hyphae_id), so always pass it positionally. For
-# readings_hyphae, relay_number is keyword-defaulted None, so the same call
-# shape works without special-casing. The timestamp column is `reading_ts` in
-# all four tables, returned ORDER BY reading_ts DESC.
+# id as the FIRST POSITIONAL arg in every module (spore/weather/hyphae/sentinel
+# name it device_id, pressure names it hyphae_id), so always pass it
+# positionally. For readings_hyphae, relay_number is keyword-defaulted None, so
+# the same call shape works without special-casing. The timestamp column is
+# `reading_ts` in all five tables, returned ORDER BY reading_ts DESC.
 
 READINGS_SOURCES = {
     "readings_spore": {
@@ -50,6 +52,27 @@ READINGS_SOURCES = {
         "device_fn": lambda: device_spore.get_all_device_spore(active_only=True),
         # Standard metric order: CO2, humidity, temp
         "metrics": {"co2": "CO2 (ppm)", "humidity": "Humidity (%)", "temp": "Temp"},
+        "has_relay": False,
+    },
+    "readings_sentinel": {
+        "label": "Sentinel Air Quality Readings",
+        "module": readings_sentinel,
+        "device_fn": lambda: device_sentinel.get_all_device_sentinel(active_only=True),
+        # PM first (the hero metrics), then the standard CO2 / humidity / temp
+        # trio, then the remaining channels. Nulls (unavailable channels) are
+        # stored as-is and simply leave gaps in a series.
+        "metrics": {
+            "pm2_5": "PM2.5 (µg/m³)",
+            "pm1": "PM1 (µg/m³)",
+            "pm4": "PM4 (µg/m³)",
+            "pm10": "PM10 (µg/m³)",
+            "voc": "VOC Index",
+            "nox": "NOx Index",
+            "co2": "CO2 (ppm)",
+            "humidity": "Humidity (%)",
+            "temp": "Temp",
+            "pressure_hpa": "Pressure (hPa)",
+        },
         "has_relay": False,
     },
     "readings_weather": {

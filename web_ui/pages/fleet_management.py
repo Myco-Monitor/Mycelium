@@ -72,7 +72,7 @@ def _firmware_inventory_section(colors: dict):
 
         with ui.row().classes("w-full items-end gap-4"):
             device_type = ui.select(
-                options=["spore", "hyphae"],
+                options=["spore", "hyphae", "sentinel"],
                 label="Device Type",
                 value="spore",
             ).classes("w-32")
@@ -167,10 +167,16 @@ def _batch_ota_section(colors: dict):
     """Batch OTA: select firmware, select devices, push to all."""
     from storage.tables.device_spore import get_all_device_spore
     from storage.tables.device_hyphae import get_all_device_hyphae
+    from storage.tables.device_sentinel import get_all_device_sentinel
     from storage.tables.firmware_versions import get_all_firmware_versions
     from api.services.ota_service import OtaService
 
     ota_svc = OtaService()
+    device_getters = {
+        "spore": get_all_device_spore,
+        "hyphae": get_all_device_hyphae,
+        "sentinel": get_all_device_sentinel,
+    }
 
     # Step 1: Select device type and firmware
     with ui.card().classes("w-full p-4 q-mb-md"):
@@ -178,7 +184,7 @@ def _batch_ota_section(colors: dict):
 
         with ui.row().classes("w-full items-end gap-4"):
             dtype = ui.select(
-                options=["spore", "hyphae"],
+                options=["spore", "hyphae", "sentinel"],
                 label="Device Type",
                 value="spore",
             ).classes("w-40")
@@ -221,10 +227,7 @@ def _batch_ota_section(colors: dict):
         @ui.refreshable
         def device_checklist():
             dt = dtype.value
-            if dt == "spore":
-                devices = get_all_device_spore()
-            else:
-                devices = get_all_device_hyphae()
+            devices = device_getters.get(dt, get_all_device_spore)()
 
             if not devices:
                 ui.label("No devices found").classes("text-muted")
@@ -404,12 +407,14 @@ def _device_versions_section(colors: dict):
     """Show current firmware version per device with PIN status."""
     from storage.tables.device_spore import get_all_device_spore
     from storage.tables.device_hyphae import get_all_device_hyphae
+    from storage.tables.device_sentinel import get_all_device_sentinel
     from api.services.ota_service import OtaService
 
     ota_svc = OtaService()
 
     spores = get_all_device_spore()
     hyphae = get_all_device_hyphae()
+    sentinels = get_all_device_sentinel()
 
     columns = [
         {"name": "type", "label": "Type", "field": "type", "align": "left"},
@@ -440,6 +445,19 @@ def _device_versions_section(colors: dict):
             {
                 "id": f"hyphae-{d['device_id']}",
                 "type": "Hyphae",
+                "name": d.get("device_name", ""),
+                "ip": d.get("hostname", ""),
+                "firmware": d.get("firmware_version", "Unknown"),
+                "pin_status": {"device": "Device", "missing": "MISSING"}[ps],
+                "online": "Yes" if d.get("is_online") else "No",
+            }
+        )
+    for d in sentinels:
+        ps = ota_svc.get_pin_status(d["device_id"], "sentinel")
+        rows.append(
+            {
+                "id": f"sentinel-{d['device_id']}",
+                "type": "Sentinel",
                 "name": d.get("device_name", ""),
                 "ip": d.get("hostname", ""),
                 "firmware": d.get("firmware_version", "Unknown"),

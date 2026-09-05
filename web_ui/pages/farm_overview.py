@@ -27,6 +27,7 @@ from storage.tables.grow_rooms import (
 )
 from storage.tables.device_spore import get_all_device_spore
 from storage.tables.device_hyphae import get_all_device_hyphae
+from storage.tables.device_sentinel import get_all_device_sentinel
 
 
 # ---------------------------------------------------------------------------
@@ -99,12 +100,14 @@ def _summary_row(colors: dict):
     rooms = get_all_grow_rooms(active_only=True)
     spores = get_all_device_spore()
     hyphaes = get_all_device_hyphae()
+    sentinels = get_all_device_sentinel()
 
     with ui.row().classes("w-full gap-4 flex-wrap"):
         _stat_card("Farms", str(len(farms)), "agriculture", colors)
         _stat_card("Rooms", str(len(rooms)), "meeting_room", colors)
         _stat_card("Spores", str(len(spores)), "sensors", colors)
         _stat_card("Hyphae", str(len(hyphaes)), "device_hub", colors)
+        _stat_card("Sentinels", str(len(sentinels)), "air", colors)
 
 
 def _stat_card(label, value, icon, colors):
@@ -160,6 +163,7 @@ def _farm_card(farm: dict, colors: dict):
             _inline_stat("Rooms", stats.get("room_count", 0))
             _inline_stat("Spores", stats.get("spore_count", 0))
             _inline_stat("Hyphae", stats.get("hyphae_count", 0))
+            _inline_stat("Sentinels", stats.get("sentinel_count", 0))
             online = stats.get("online_devices", 0)
             total = stats.get("total_devices", 0)
             _inline_stat("Online", f"{online}/{total}")
@@ -213,6 +217,7 @@ def _room_row(room: dict, colors: dict):
     # Count devices in this room
     spores = [d for d in get_all_device_spore() if d.get("room_id") == rid]
     hyphaes = [d for d in get_all_device_hyphae() if d.get("room_id") == rid]
+    sentinels = [d for d in get_all_device_sentinel() if d.get("room_id") == rid]
 
     opacity = "" if is_active else "opacity: 0.55;"
 
@@ -236,6 +241,9 @@ def _room_row(room: dict, colors: dict):
                 with ui.row().classes("items-center gap-1"):
                     ui.icon("device_hub", size="xs").classes("text-muted")
                     ui.label(str(len(hyphaes))).classes("text-caption")
+                with ui.row().classes("items-center gap-1"):
+                    ui.icon("air", size="xs").classes("text-muted")
+                    ui.label(str(len(sentinels))).classes("text-caption")
 
             # Actions
             with ui.row().classes("gap-1"):
@@ -450,6 +458,7 @@ def _safe_stats(farm_id: int) -> dict:
             "room_count": 0,
             "spore_count": 0,
             "hyphae_count": 0,
+            "sentinel_count": 0,
             "online_devices": 0,
             "total_devices": 0,
             "online_pct": 0,

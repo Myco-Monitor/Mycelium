@@ -1,9 +1,11 @@
 """
 Devices page for Mycelium NiceGUI application.
 
-Comprehensive device management for Spore and Hyphae devices.
+Comprehensive device management for Spore, Hyphae and Sentinel devices.
 Provides device tables, add dialogs, and detail panels with readings,
-configuration, relay state, schedule, and dynamic control views.
+configuration, relay state, schedule, and dynamic control views. The
+Sentinel-specific panels live in web_ui.pages.devices_sentinel (imported
+lazily here, since that module reuses this one's helpers).
 """
 
 import re
@@ -33,6 +35,7 @@ from storage.tables.device_hyphae import (
     update_device_hyphae,
     delete_device_hyphae,
 )
+from storage.tables.device_sentinel import delete_device_sentinel
 from storage.tables.grow_rooms import get_all_grow_rooms
 from storage.tables.relay_settings import get_device_relay_settings
 from storage.tables.device_pins import (
@@ -536,6 +539,13 @@ def devices_page():
     back_to_dashboard()
     colors = get_colors()
 
+    # Lazy: devices_sentinel reuses this module's helpers, so importing it at
+    # module level would be circular.
+    from web_ui.pages.devices_sentinel import (
+        _build_sentinel_panel,
+        _safe_get_sentinel_devices,
+    )
+
     # Shared state for device detail
     selected_device = {"type": None, "data": None}
 
@@ -556,13 +566,17 @@ def devices_page():
             with stat_cards_container:
                 spore_devices = _safe_get_spore_devices()
                 hyphae_devices = _safe_get_hyphae_devices()
+                sentinel_devices = _safe_get_sentinel_devices()
                 spore_online = sum(1 for d in spore_devices if d.get("is_online"))
                 hyphae_online = sum(1 for d in hyphae_devices if d.get("is_online"))
+                sentinel_online = sum(1 for d in sentinel_devices if d.get("is_online"))
                 total_offline = (
                     len(spore_devices)
                     + len(hyphae_devices)
+                    + len(sentinel_devices)
                     - spore_online
                     - hyphae_online
+                    - sentinel_online
                 )
 
                 _stat_card(
@@ -580,6 +594,13 @@ def devices_page():
                     colors,
                 )
                 _stat_card(
+                    "Sentinel Online",
+                    str(sentinel_online),
+                    "air",
+                    STATUS_COLORS["online"],
+                    colors,
+                )
+                _stat_card(
                     "Devices Offline",
                     str(total_offline),
                     "warning",
@@ -589,11 +610,12 @@ def devices_page():
 
         stat_cards()
 
-        # --- Tabs (Spore / Hyphae). Each device row expands inline to reveal its
-        #     detail tabs, so there is no separate "Device Detail" tab. ---
+        # --- Tabs (Spore / Hyphae / Sentinel). Each device row expands inline to
+        #     reveal its detail tabs, so there is no separate "Device Detail" tab.
         with ui.tabs().classes("w-full") as tabs:
             spore_tab = ui.tab("Spore Devices", icon="sensors")
             hyphae_tab = ui.tab("Hyphae Devices", icon="device_hub")
+            sentinel_tab = ui.tab("Sentinel Devices", icon="air")
 
         with ui.tab_panels(tabs, value=spore_tab).classes("w-full"):
             # =============================================================
@@ -607,6 +629,12 @@ def devices_page():
             # =============================================================
             with ui.tab_panel(hyphae_tab):
                 _build_hyphae_panel(colors, selected_device, stat_cards)
+
+            # =============================================================
+            # SENTINEL TAB
+            # =============================================================
+            with ui.tab_panel(sentinel_tab):
+                _build_sentinel_panel(colors, selected_device, stat_cards)
 
         # Wire discovery button now that stat_cards is defined
         discover_btn.on(
@@ -631,6 +659,7 @@ def devices_page():
             for table_key, open_key in (
                 ("_spore_table", "_open_spore"),
                 ("_hyphae_table", "_open_hyphae"),
+                ("_sentinel_table", "_open_sentinel"),
             ):
                 ref = selected_device.get(table_key)
                 if ref is not None and not selected_device.get(open_key):
@@ -2134,8 +2163,15 @@ def _hyphae_dynamic_panel(device: Dict, colors: dict, register):
 
 
 # ---------------------------------------------------------------------------
-# Device Management panel (PIN + OTA) — shared by Spore and Hyphae
+# Device Management panel (PIN + OTA) — shared by Spore, Hyphae and Sentinel
 # ---------------------------------------------------------------------------
+
+# device_type -> hard-delete function used by the Remove Device card.
+_DELETE_DEVICE = {
+    "spore": delete_device_spore,
+    "hyphae": delete_device_hyphae,
+    "sentinel": delete_device_sentinel,
+}
 
 
 def _device_management_panel(
@@ -2229,10 +2265,7 @@ def _device_management_panel(
 
         def _do_remove():
             try:
-                if device_type == "spore":
-                    delete_device_spore(device_id)
-                else:
-                    delete_device_hyphae(device_id)
+                _DELETE_DEVICE[device_type](device_id)
             except Exception as exc:
                 ui.notify(f"Remove failed: {exc}", type="negative")
                 return
@@ -2243,7 +2276,12 @@ def _device_management_panel(
             # Refresh the device lists/stat cards so the removed row disappears.
             # Rebuilding the list resets its open-row set, collapsing this panel.
             if selected_device is not None:
-                for key in ("_spore_table", "_hyphae_table", "_stat_cards"):
+                for key in (
+                    "_spore_table",
+                    "_hyphae_table",
+                    "_sentinel_table",
+                    "_stat_cards",
+                ):
                     ref = selected_device.get(key)
                     if ref is not None:
                         try:
@@ -2400,7 +2438,19 @@ def _mini_stat(label: str, value: str, accent: str):
 
 async def _run_mdns_discovery(colors: dict, stat_cards=None, selected_device=None):
     """Run mDNS discovery and display results in a dialog."""
+    from web_ui.pages.devices_sentinel import (
+        _safe_get_sentinel_devices,
+        store_complete_sentinel_device_data,
+    )
+
     rooms = _room_options()
+    # device_type -> (register function, table refresher key). Spore/Hyphae
+    # require a room; a Sentinel (grower-air monitor outside the tents) does not.
+    registrars = {
+        "spore": (store_complete_spore_device_data, "_spore_table"),
+        "hyphae": (store_complete_hyphae_device_data, "_hyphae_table"),
+        "sentinel": (store_complete_sentinel_device_data, "_sentinel_table"),
+    }
 
     with ui.dialog() as dlg, ui.card().classes("p-4 min-w-96"):
         ui.label("Device Discovery").classes("text-h6 q-mb-sm")
@@ -2414,6 +2464,8 @@ async def _run_mdns_discovery(colors: dict, stat_cards=None, selected_device=Non
     for d in _safe_get_spore_devices():
         existing_ips.add(d.get("hostname"))
     for d in _safe_get_hyphae_devices():
+        existing_ips.add(d.get("hostname"))
+    for d in _safe_get_sentinel_devices():
         existing_ips.add(d.get("hostname"))
 
     try:
@@ -2444,31 +2496,30 @@ async def _run_mdns_discovery(colors: dict, stat_cards=None, selected_device=Non
                                         "text-caption text-muted"
                                     )
 
+                            room_optional = device_type == "sentinel"
                             if already_added:
                                 ui.badge("Already Added").props("color=grey")
-                            elif device_type in ("spore", "hyphae") and rooms:
+                            elif device_type in registrars and (rooms or room_optional):
                                 room_select = ui.select(
                                     options=rooms,
-                                    label="Room",
+                                    label="Room (optional)"
+                                    if room_optional
+                                    else "Room",
                                     with_input=True,
+                                    clearable=room_optional,
                                 ).classes("min-w-32")
 
                                 def _make_add_handler(dev_ip, dev_type, room_sel):
+                                    register, table_key = registrars[dev_type]
+
                                     def handler():
                                         room_id = room_sel.value
-                                        if not room_id:
+                                        if not room_id and dev_type != "sentinel":
                                             ui.notify(
                                                 "Select a room first.", type="warning"
                                             )
                                             return
-                                        if dev_type == "spore":
-                                            result = store_complete_spore_device_data(
-                                                dev_ip, room_id
-                                            )
-                                        else:
-                                            result = store_complete_hyphae_device_data(
-                                                dev_ip, room_id
-                                            )
+                                        result = register(dev_ip, room_id or None)
                                         if result.get("success"):
                                             existing_ips.add(dev_ip)
                                             ui.notify(
@@ -2480,11 +2531,7 @@ async def _run_mdns_discovery(colors: dict, stat_cards=None, selected_device=Non
                                             # Refresh the device table so the new
                                             # device shows up in the list immediately.
                                             if selected_device is not None:
-                                                tbl = selected_device.get(
-                                                    "_spore_table"
-                                                    if dev_type == "spore"
-                                                    else "_hyphae_table"
-                                                )
+                                                tbl = selected_device.get(table_key)
                                                 if tbl is not None:
                                                     try:
                                                         tbl.refresh()
@@ -2531,11 +2578,14 @@ def _export_devices_csv(device_type: str):
     import csv
     import io
 
-    devices = (
-        _safe_get_spore_devices()
-        if device_type == "spore"
-        else _safe_get_hyphae_devices()
-    )
+    from web_ui.pages.devices_sentinel import _safe_get_sentinel_devices
+
+    getters = {
+        "spore": _safe_get_spore_devices,
+        "hyphae": _safe_get_hyphae_devices,
+        "sentinel": _safe_get_sentinel_devices,
+    }
+    devices = getters[device_type]()
     if not devices:
         ui.notify(f"No {device_type} devices to export.", type="info")
         return
@@ -2565,7 +2615,11 @@ def _open_import_csv_dialog(device_type: str, table_refresh, stat_cards_refresh)
     import csv
     import io
 
+    from web_ui.pages.devices_sentinel import store_complete_sentinel_device_data
+
     rooms = _room_options()
+    # A Sentinel (grower-air monitor outside the tents) needs no room.
+    room_optional = device_type == "sentinel"
 
     with ui.dialog() as dialog, ui.card().classes("min-w-[500px] p-4"):
         ui.label(f"Import {device_type.title()} Devices from CSV").classes(
@@ -2581,6 +2635,8 @@ def _open_import_csv_dialog(device_type: str, table_refresh, stat_cards_refresh)
         def _download_template():
             if device_type == "spore":
                 header = "device_name,hostname,mac_address,room_id\nMy-Spore,192.168.1.100,,1\n"
+            elif device_type == "sentinel":
+                header = "device_name,hostname,mac_address,room_id\nMy-Sentinel,sentinel-1234.local,,\n"
             else:
                 header = "device_name,hostname,mac_address,room_id,pin\nMy-Hyphae,192.168.1.200,,1,12345\n"
             ui.download(header.encode(), f"{device_type}_template.csv")
@@ -2591,8 +2647,10 @@ def _open_import_csv_dialog(device_type: str, table_refresh, stat_cards_refresh)
 
         room_select = ui.select(
             options=rooms,
-            label="Default Room (for rows without room_id)",
+            label="Default Room (for rows without room_id)"
+            + (" — optional" if room_optional else ""),
             with_input=True,
+            clearable=room_optional,
         ).classes("w-full q-mt-md")
 
         upload_area = (
@@ -2630,7 +2688,7 @@ def _open_import_csv_dialog(device_type: str, table_refresh, stat_cards_refresh)
                     ui.notify("No CSV data loaded.", type="warning")
                     return
                 default_room = room_select.value
-                if not default_room:
+                if not default_room and not room_optional:
                     ui.notify("Select a default room.", type="warning")
                     return
 
@@ -2644,6 +2702,10 @@ def _open_import_csv_dialog(device_type: str, table_refresh, stat_cards_refresh)
                     try:
                         if device_type == "spore":
                             result = store_complete_spore_device_data(ip, row_room)
+                        elif device_type == "sentinel":
+                            result = store_complete_sentinel_device_data(
+                                ip, row_room or None
+                            )
                         else:
                             pin = row.get("pin", "")
                             result = store_complete_hyphae_device_data(
