@@ -15,12 +15,12 @@ from storage.db_utils import (
     get_timestamp,
 )
 
-# Bare device label (spore-NNNN / hyphae-NNNN) with no domain suffix.
-_DEVICE_LABEL = re.compile(r"^(?:spore|hyphae)-\d{4}$", re.IGNORECASE)
+# Bare device label (spore-NNNN / hyphae-NNNN / sentinel-NNNN) with no domain suffix.
+_DEVICE_LABEL = re.compile(r"^(?:spore|hyphae|sentinel)-\d{4}$", re.IGNORECASE)
 
 
 def normalize_device_host(host: str) -> str:
-    """Append '.local' to a bare 'spore-NNNN'/'hyphae-NNNN' label.
+    """Append '.local' to a bare 'spore-NNNN'/'hyphae-NNNN'/'sentinel-NNNN' label.
 
     Device TLS certs have a SAN of '<name>.local'; connecting to the bare label
     fails verification and floods the device log with handshake fatal alerts.

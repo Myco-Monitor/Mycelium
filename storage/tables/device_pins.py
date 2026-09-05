@@ -81,14 +81,14 @@ def store_device_pin(device_id: int, device_type: str, pin: str) -> bool:
 
     Args:
         device_id (int): ID of the device
-        device_type (str): Type of device ('spore' or 'hyphae')
+        device_type (str): Type of device ('spore', 'hyphae' or 'sentinel')
         pin (str): Legacy 4-8 digit PIN or 8-64 char device password
 
     Returns:
         bool: True if successful
     """
-    if device_type not in ("spore", "hyphae"):
-        raise ValueError("device_type must be 'spore' or 'hyphae'")
+    if device_type not in ("spore", "hyphae", "sentinel"):
+        raise ValueError("device_type must be 'spore', 'hyphae' or 'sentinel'")
 
     pin = (pin or "").strip()
     if not is_valid_device_credential(pin):

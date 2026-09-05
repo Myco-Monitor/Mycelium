@@ -7,6 +7,7 @@ It can optionally delete an existing database before creating a new one.
 """
 
 import os
+import re
 import sqlite3
 import argparse
 
@@ -106,12 +107,81 @@ _COLUMN_ADDITIONS = [
 ]
 
 
+# Tables whose device_type CHECK must admit 'sentinel' (added in v2.8.0).
+# Databases created earlier have CHECK(device_type IN ('spore', 'hyphae')) and
+# SQLite cannot ALTER a CHECK, so each is rebuilt once from the DDL in
+# create_unified_database.sql. Detection inspects sqlite_master, so the rebuild
+# is idempotent and a no-op on a fresh database.
+_CHECK_REBUILD_TABLES = (
+    "firmware_versions",
+    "ota_history",
+    "device_health_log",
+    "device_pins",
+)
+
+
+def _table_sql(conn, table):
+    """The CREATE TABLE statement SQLite stored for `table`, or None if absent."""
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)
+    ).fetchone()
+    return row[0] if row else None
+
+
+def _schema_create_body(script, table):
+    """Column/constraint body of `table`'s CREATE TABLE in the schema script.
+
+    The script writes each table's closing `);` alone on its own line, so the
+    non-greedy match cannot stop early inside a CHECK(...) clause.
+    """
+    match = re.search(
+        rf"CREATE TABLE IF NOT EXISTS {re.escape(table)} \((.*?)\n\);",
+        script,
+        re.S,
+    )
+    if not match:
+        raise ValueError(f"{table} not found in schema script")
+    return match.group(1)
+
+
+def _rebuild_check_table(conn, script, table):
+    """Recreate `table` from the schema script, preserving every row and id.
+
+    Follows the sqlite.org ALTER TABLE procedure: create the new table under a
+    temporary name, copy by explicit column list (so AUTOINCREMENT ids and the
+    sqlite_sequence counter carry over), drop the old table, rename. Indexes
+    are dropped with the old table; the caller's schema pass recreates them.
+    Foreign-key enforcement is off in this project (see db_utils) and nothing
+    references these tables by FK, so the drop is safe. Table names are the
+    trusted constants in _CHECK_REBUILD_TABLES, never user input.
+    """
+    body = _schema_create_body(script, table)
+    new_table = f"{table}__new"
+
+    create_ddl = f"CREATE TABLE {new_table} ({body})"
+    conn.execute(create_ddl)
+
+    pragma = f"PRAGMA table_info({table})"
+    cols = ", ".join(r[1] for r in conn.execute(pragma).fetchall())
+    copy_ddl = f"INSERT INTO {new_table} ({cols}) SELECT {cols} FROM {table}"
+    conn.execute(copy_ddl)
+
+    drop_ddl = f"DROP TABLE {table}"
+    conn.execute(drop_ddl)
+    rename_ddl = f"ALTER TABLE {new_table} RENAME TO {table}"
+    conn.execute(rename_ddl)
+
+
 def apply_migrations(db_path):
     """
     Idempotently bring an existing database up to the current schema.
 
-    Only adds columns that are missing, so it is safe to run on every startup
-    and on a freshly created database (where it is a no-op).
+    Three steps, each a no-op when already applied, so it is safe to run on
+    every startup and on a freshly created database:
+      1. Rebuild the device_type CHECK tables that predate 'sentinel'.
+      2. Re-run the schema script (entirely IF NOT EXISTS) so tables and
+         indexes added since the database was created exist.
+      3. Add columns that were appended to existing tables.
 
     Note: user_settings.reset_pin (the retired "Mycelium PIN") is deprecated —
     sensitive actions are confirmed with the account password instead. The
@@ -125,15 +195,37 @@ def apply_migrations(db_path):
     except sqlite3.Error as e:
         print(f"Error opening database for migration: {e}")
         return False
+    # Autocommit mode: the CHECK rebuild manages its own explicit transaction,
+    # and executescript() would otherwise commit whatever was pending anyway.
+    conn.isolation_level = None
     try:
+        script = read_sql_script(SQL_SCRIPT_PATH)
+
+        pending = []
+        for table in _CHECK_REBUILD_TABLES:
+            sql = _table_sql(conn, table)
+            if sql and "'sentinel'" not in sql:
+                pending.append(table)
+        if pending:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                for table in pending:
+                    print(f"Rebuilding device_type CHECK on {table}")
+                    _rebuild_check_table(conn, script, table)
+                conn.execute("COMMIT")
+            except (sqlite3.Error, ValueError):
+                conn.execute("ROLLBACK")
+                raise
+
+        conn.executescript(script)
+
         for table, column, decl in _COLUMN_ADDITIONS:
             if not _column_exists(conn, table, column):
                 print(f"Adding missing column {table}.{column}")
                 ddl = f"ALTER TABLE {table} ADD COLUMN {column} {decl}"
                 conn.execute(ddl)
-        conn.commit()
         return True
-    except sqlite3.Error as e:
+    except (sqlite3.Error, ValueError) as e:
         print(f"Error applying migrations: {e}")
         return False
     finally:

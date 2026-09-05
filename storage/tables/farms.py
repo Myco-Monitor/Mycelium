@@ -227,8 +227,27 @@ def get_farm_statistics(farm_id: int) -> Dict[str, Any]:
     online_hyphae_result = execute_query(online_hyphae_query, (farm_id,))
     online_hyphae = online_hyphae_result[0]["count"] if online_hyphae_result else 0
 
-    total_devices = spore_count + hyphae_count
-    online_devices = online_spore + online_hyphae
+    # Sentinel counts (only room-assigned Sentinels belong to a farm)
+    sentinel_query = """
+        SELECT COUNT(*) as count FROM device_sentinel dsn
+        JOIN grow_rooms gr ON dsn.room_id = gr.room_id
+        WHERE gr.farm_id = ? AND dsn.active = 1
+    """
+    sentinel_result = execute_query(sentinel_query, (farm_id,))
+    sentinel_count = sentinel_result[0]["count"] if sentinel_result else 0
+
+    online_sentinel_query = """
+        SELECT COUNT(*) as count FROM device_sentinel dsn
+        JOIN grow_rooms gr ON dsn.room_id = gr.room_id
+        WHERE gr.farm_id = ? AND dsn.active = 1 AND dsn.is_online = 1
+    """
+    online_sentinel_result = execute_query(online_sentinel_query, (farm_id,))
+    online_sentinel = (
+        online_sentinel_result[0]["count"] if online_sentinel_result else 0
+    )
+
+    total_devices = spore_count + hyphae_count + sentinel_count
+    online_devices = online_spore + online_hyphae + online_sentinel
     online_pct = (online_devices / total_devices * 100) if total_devices > 0 else 0
 
     # Get latest readings averages
@@ -250,6 +269,7 @@ def get_farm_statistics(farm_id: int) -> Dict[str, Any]:
         "room_count": room_count,
         "spore_count": spore_count,
         "hyphae_count": hyphae_count,
+        "sentinel_count": sentinel_count,
         "total_devices": total_devices,
         "online_devices": online_devices,
         "online_pct": round(online_pct, 1),

@@ -94,6 +94,32 @@ CREATE TABLE IF NOT EXISTS device_spore (
 CREATE INDEX IF NOT EXISTS idx_device_spore_room_id ON device_spore(room_id);
 CREATE INDEX IF NOT EXISTS idx_device_spore_hyphae_id ON device_spore(hyphae_id);
 
+-- Create device_sentinel table: grower-environment air-quality monitor
+-- (SEN66 PM/VOC/NOx/CO2/T/RH + BMP581 pressure). A Sentinel usually sits
+-- outside any grow tent, so room_id is optional.
+CREATE TABLE IF NOT EXISTS device_sentinel (
+    device_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    device_name TEXT NOT NULL,
+    room_id INTEGER,
+    hostname TEXT NOT NULL,
+    mac_address TEXT UNIQUE NOT NULL,
+    firmware_version TEXT,
+    is_online INTEGER DEFAULT 0,
+    -- Latest diagnostics snapshot from /api/diagnostics (refreshed periodically)
+    wifi_rssi INTEGER,
+    heap_free_kb INTEGER,
+    heap_min_free_kb INTEGER,
+    uptime_sec INTEGER,
+    last_update TEXT,
+    active INTEGER DEFAULT 1,
+    deactivation_reason TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (room_id) REFERENCES grow_rooms(room_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_device_sentinel_room_id ON device_sentinel(room_id);
+CREATE INDEX IF NOT EXISTS idx_device_sentinel_active ON device_sentinel(active);
+
 -- Time-series Data Tables
 
 -- Create readings_spore table
@@ -111,6 +137,30 @@ CREATE TABLE IF NOT EXISTS readings_spore (
 CREATE INDEX IF NOT EXISTS idx_readings_spore_device_id ON readings_spore(device_id);
 CREATE INDEX IF NOT EXISTS idx_readings_spore_timestamp ON readings_spore(reading_ts);
 CREATE INDEX IF NOT EXISTS idx_readings_spore_device_time ON readings_spore(device_id, reading_ts DESC);
+
+-- Create readings_sentinel table. Every channel is nullable: the firmware
+-- emits null for a channel that is unavailable (sensor warming up or faulted).
+-- PM in ug/m3, VOC/NOx are Sensirion indices (1-500), pressure in hPa.
+CREATE TABLE IF NOT EXISTS readings_sentinel (
+    device_id INTEGER NOT NULL,
+    reading_ts TEXT NOT NULL,
+    pm1 REAL,
+    pm2_5 REAL,
+    pm4 REAL,
+    pm10 REAL,
+    co2 REAL,
+    humidity REAL,
+    temp REAL,
+    voc REAL,
+    nox REAL,
+    pressure_hpa REAL,
+    PRIMARY KEY (device_id, reading_ts),
+    FOREIGN KEY (device_id) REFERENCES device_sentinel(device_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_readings_sentinel_device_id ON readings_sentinel(device_id);
+CREATE INDEX IF NOT EXISTS idx_readings_sentinel_timestamp ON readings_sentinel(reading_ts);
+CREATE INDEX IF NOT EXISTS idx_readings_sentinel_device_time ON readings_sentinel(device_id, reading_ts DESC);
 
 -- Create readings_hyphae table
 CREATE TABLE IF NOT EXISTS readings_hyphae (
@@ -168,7 +218,7 @@ CREATE INDEX IF NOT EXISTS idx_readings_pressure_device_time ON readings_pressur
 -- Firmware version inventory
 CREATE TABLE IF NOT EXISTS firmware_versions (
     version_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    device_type TEXT NOT NULL CHECK(device_type IN ('spore', 'hyphae')),
+    device_type TEXT NOT NULL CHECK(device_type IN ('spore', 'hyphae', 'sentinel')),
     version TEXT NOT NULL,
     file_path TEXT NOT NULL,
     file_hash TEXT NOT NULL,
@@ -184,7 +234,7 @@ CREATE INDEX IF NOT EXISTS idx_fw_uploaded ON firmware_versions(uploaded_at);
 CREATE TABLE IF NOT EXISTS ota_history (
     ota_id INTEGER PRIMARY KEY AUTOINCREMENT,
     device_id INTEGER NOT NULL,
-    device_type TEXT NOT NULL CHECK(device_type IN ('spore', 'hyphae')),
+    device_type TEXT NOT NULL CHECK(device_type IN ('spore', 'hyphae', 'sentinel')),
     firmware_name TEXT,
     status TEXT NOT NULL CHECK(status IN ('pending', 'uploading', 'success', 'failed')),
     error_message TEXT,
@@ -531,7 +581,7 @@ CREATE INDEX IF NOT EXISTS idx_utilities_dued ON utilities(util_dued);
 CREATE TABLE IF NOT EXISTS device_health_log (
     log_id INTEGER PRIMARY KEY AUTOINCREMENT,
     device_id INTEGER NOT NULL,
-    device_type TEXT NOT NULL CHECK(device_type IN ('spore', 'hyphae')),
+    device_type TEXT NOT NULL CHECK(device_type IN ('spore', 'hyphae', 'sentinel')),
     check_time TEXT DEFAULT CURRENT_TIMESTAMP,
     is_online INTEGER NOT NULL,
     response_time_ms INTEGER,
@@ -549,7 +599,7 @@ CREATE INDEX IF NOT EXISTS idx_health_online ON device_health_log(is_online);
 
 CREATE TABLE IF NOT EXISTS device_pins (
     device_id INTEGER NOT NULL,
-    device_type TEXT NOT NULL CHECK(device_type IN ('spore', 'hyphae')),
+    device_type TEXT NOT NULL CHECK(device_type IN ('spore', 'hyphae', 'sentinel')),
     encrypted_pin TEXT NOT NULL,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
