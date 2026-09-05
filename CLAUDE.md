@@ -4,7 +4,7 @@ This file provides component-specific guidance for the Mycelium data processing 
 
 ## Component Overview
 
-Mycelium is the central data processing, device control, and visualization platform for the MycoMonitor ecosystem. It communicates with Spore (sensor) and Hyphae (controller) devices over HTTPS, stores data in SQLite, and provides a reactive web dashboard.
+Mycelium is the central data processing, device control, and visualization platform for the MycoMonitor ecosystem. It communicates with Spore (sensor), Hyphae (controller) and Sentinel (grower-air quality monitor) devices over HTTPS, stores data in SQLite, and provides a reactive web dashboard.
 
 ## Technology Stack
 
@@ -25,6 +25,7 @@ Mycelium/
 │   │   ├── base_client.py      # aiohttp base with HTTPS/retry/throttle
 │   │   ├── spore_client.py     # Spore device API client
 │   │   ├── hyphae_client.py    # Hyphae device API client
+│   │   ├── sentinel_client.py  # Sentinel device API client (null-safe channels)
 │   │   ├── weather_client.py   # OpenWeatherMap client
 │   │   └── pressure_client.py  # Pressure data client
 │   ├── services/               # Business logic services
@@ -48,6 +49,7 @@ Mycelium/
 │   ├── pages/                  # Application pages (@ui.page routes)
 │   │   ├── dashboard.py        # Main dashboard + weather + pressure cards
 │   │   ├── devices.py          # Device management + centralized control
+│   │   ├── devices_sentinel.py # Sentinel tab/detail panels (imported lazily by devices.py)
 │   │   ├── farm_overview.py    # Farm/room CRUD
 │   │   ├── alerts.py           # Alert rules + history
 │   │   ├── analytics.py        # Notebook-style analysis
@@ -98,7 +100,7 @@ adding them through the UI using their `host:port` address.
 ## Architecture
 
 ### Data Flow
-1. **Discovery**: mDNS (`zeroconf`) discovers `spore-NNNN.local` / `hyphae-NNNN.local`, CIDR scan as fallback
+1. **Discovery**: mDNS (`zeroconf`) discovers `spore-NNNN.local` / `hyphae-NNNN.local` / `sentinel-NNNN.local` (devices are addressed by hostname; IP breaks TLS)
 2. **Collection**: API clients poll devices over HTTPS (CA cert from CSP), polling_service manages intervals
 3. **Storage**: SQLite with WAL mode, 30+ table modules for readings, devices, alerts, business data
 4. **Processing**: Background services handle pressure distribution, reconnection, alert evaluation
@@ -160,6 +162,7 @@ The NiceGUI UI package is `web_ui/` (not `ui/`) because `ui` conflicts with `fro
   "polling": {
     "spore":   { "interval": 60,   "jitter": 5,  "backoff_factor": 2, "max_backoff": 3600,  "enabled": true },
     "hyphae":  { "interval": 60,   "jitter": 5,  "backoff_factor": 2, "max_backoff": 3600,  "enabled": true },
+    "sentinel":{ "interval": 60,   "jitter": 5,  "backoff_factor": 2, "max_backoff": 3600,  "enabled": true },
     "weather": { "interval": 1800, "jitter": 60, "backoff_factor": 2, "max_backoff": 14400, "enabled": true },
     "pressure":{ "interval": 300,  "jitter": 30, "backoff_factor": 2, "max_backoff": 3600,  "enabled": true },
     "alerts":  { "interval": 60,   "jitter": 5,  "enabled": true }
@@ -185,6 +188,13 @@ App version is not in config — it lives in `version.py` (`__version__`). TLS (
 - `POST /api/relay/test|config|groups/set|thresholds|schedule|mode` — Relay control (PIN required)
 - `POST /api/ota/start-upload` + `/api/ota/upload-stream` — Two-phase OTA (PIN required)
 
+### Sentinel API (HTTPS, port 443)
+- `GET /api/readings/latest` — Latest reading: `co2, temperature, humidity, pm1, pm2_5, pm4, pm10, voc, nox, pressure_hpa` (each `float|null`, null = channel unavailable, never 0), plus `firmware_version` (no `/api/status` on Sentinel), `sen66_ok`, `bmp581_ok`, `age_sec`, `timestamp` (Unix s, 0 until NTP). No data yet → `{"error":"no data", ...}` with the measurement keys absent.
+- `GET /api/diagnostics` — Spore-shaped `system` block (uptime, heap, RSSI) + `sensors` flags + error ring (firmware 1.1.0+; older firmware 404s, logged at debug)
+- `GET /api/pressure` — BMP581 pressure (unused by Mycelium; the Sentinel pushes pressure to its Spores itself)
+- `POST /api/credential/change`, `/api/ota/*` — same as Spore (PIN required)
+- Polled every 60 s into `readings_sentinel`; a Sentinel's room is optional (it sits outside the tents)
+
 ## Development Guidelines
 
 - Follow PEP 8, use type hints
@@ -200,6 +210,7 @@ App version is not in config — it lives in `version.py` (`__version__`). TLS (
 The `PollingService` starts automatically on app startup and manages:
 - **Spore polling** (60s) — sensor readings from all registered Spore devices
 - **Hyphae polling** (60s) — relay state, system info from Hyphae devices
+- **Sentinel polling** (60s) — PM/VOC/NOx/CO2/T/RH/pressure readings from Sentinel devices
 - **Pressure polling** (5min) — BMP581 barometric pressure from Hyphae, distributed to associated Spores for CO2 calibration
 - **Weather polling** (30min) — OpenWeatherMap data (optional, requires API key in Settings)
 - **Alert checking** (60s) — evaluates alert rules and triggers notifications

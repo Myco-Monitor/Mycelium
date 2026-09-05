@@ -2,7 +2,7 @@
 
 **Mycelium** is the central monitoring, control, and data platform for the **Myco-Monitor** ecosystem — a modular system for precision environmental monitoring in mushroom cultivation.
 
-Mycelium runs locally on a desktop, laptop, or Raspberry Pi 4. It discovers and communicates with network-connected **Spore** (sensor) and **Hyphae** (controller) devices over HTTPS, stores data in SQLite, and provides a reactive web dashboard built on NiceGUI.
+Mycelium runs locally on a desktop, laptop, or Raspberry Pi 4. It discovers and communicates with network-connected **Spore** (sensor), **Hyphae** (controller) and **Sentinel** (grower-air quality) devices over HTTPS, stores data in SQLite, and provides a reactive web dashboard built on NiceGUI.
 
 ---
 
@@ -10,15 +10,15 @@ Mycelium runs locally on a desktop, laptop, or Raspberry Pi 4. It discovers and 
 
 ### Environmental Monitoring
 - HTTPS communication with CSP-provisioned device certificates
-- mDNS device discovery (`spore-NNNN.local`, `hyphae-NNNN.local`) with CIDR fallback
+- mDNS device discovery (`spore-NNNN.local`, `hyphae-NNNN.local`, `sentinel-NNNN.local`)
 - Real-time sensor data via WebSocket-driven UI updates
 - Timestamped logging of all readings in SQLite
-- Plotly-based visualization of CO2, temperature, humidity, and pressure
+- Plotly-based visualization of CO2, temperature, humidity, pressure, and Sentinel air quality (PM1/2.5/4/10, VOC/NOx indices, EPA AQI band)
 - Configurable polling intervals and device management
 - OpenWeatherMap integration for local weather tracking on the dashboard
 
 ### Centralized Device Control
-- All Spore and Hyphae operations from one interface
+- All Spore, Hyphae and Sentinel operations from one interface
 - Relay configuration, testing, scheduling, and dynamic threshold control
 - Remote CO2 calibration orchestration
 - Ambient pressure distribution from Hyphae BMP581 to all associated Spores
@@ -296,6 +296,7 @@ Myco-Monitor is a modular monitoring and control system for small to mid-sized m
 
 - **Spore**: ESP32-S3 environmental sensor node (CO2, temperature, humidity)
 - **Hyphae**: ESP32-S3 controller (6-relay control, pressure sensing, speaker alerts)
+- **Sentinel**: ESP32-S3 grower-environment air-quality monitor (PM, VOC, NOx, CO2, temperature, humidity, pressure)
 - **Mycelium**: Python data aggregation, control, and analysis platform (open source)
 
 Hardware and support available at [Myco-Monitor](https://myco-monitor.com).
