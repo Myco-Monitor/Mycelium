@@ -27,6 +27,7 @@ The database consists of the following major entity groups:
 
 - A farm contains multiple grow rooms
 - Each grow room contains multiple devices (Spore and Hyphae)
+- Sentinel devices (grower-air quality monitors) usually sit outside any grow room; their room link is optional
 - Spore devices can be linked to Hyphae devices
 - All sensor readings are associated with specific devices
 - Business operations (spawn, bulk, harvest) follow a linear production flow
@@ -119,6 +120,31 @@ Represents Hyphae control devices.
 - `idx_device_hyphae_room_id`: For joining with grow_rooms
 - `idx_device_hyphae_active`: For filtering active records
 
+#### device_sentinel
+Represents Sentinel grower-environment air-quality monitors (SEN66 PM/VOC/NOx/CO2/T/RH + BMP581 pressure). Added in v2.8.0.
+
+| Column | Type | Description | Constraints |
+|--------|------|-------------|------------|
+| device_id | INTEGER | Primary key | PK, AUTOINCREMENT |
+| device_name | TEXT | Device name | NOT NULL |
+| room_id | INTEGER | Reference to grow room (optional: a Sentinel usually sits outside the tents) | FK |
+| hostname | TEXT | mDNS hostname (sentinel-NNNN.local) or host:port | NOT NULL |
+| mac_address | TEXT | MAC address | UNIQUE, NOT NULL |
+| firmware_version | TEXT | Firmware version (recorded from each reading) | - |
+| is_online | INTEGER | Online status | DEFAULT 0 |
+| wifi_rssi | INTEGER | Latest WiFi RSSI snapshot (dBm) | - |
+| heap_free_kb | INTEGER | Latest free heap snapshot (KB) | - |
+| heap_min_free_kb | INTEGER | Latest minimum free heap snapshot (KB) | - |
+| uptime_sec | INTEGER | Latest device uptime snapshot (s) | - |
+| last_update | TEXT | Last successful contact | - |
+| active | INTEGER | Active status | DEFAULT 1 |
+| deactivation_reason | TEXT | Reason if inactive | - |
+| created_at | TEXT | Creation timestamp (doubles as updated-at marker) | DEFAULT CURRENT_TIMESTAMP |
+
+**Indexes**:
+- `idx_device_sentinel_room_id`: For joining with grow_rooms
+- `idx_device_sentinel_active`: For filtering active records
+
 ### Time-Series Data Tables
 
 #### readings_spore
@@ -137,6 +163,29 @@ Stores sensor readings from Spore devices.
 - `idx_readings_spore_device_id`: For filtering by device
 - `idx_readings_spore_timestamp`: For time-based queries
 - `idx_readings_spore_device_time`: Composite index for device+time queries
+
+#### readings_sentinel
+Stores air-quality readings from Sentinel devices (one row per 60 s poll). Every channel is nullable: the firmware reports null for a channel that is unavailable (sensor warming up or faulted) and that is stored as NULL, never as 0. Added in v2.8.0.
+
+| Column | Type | Description | Constraints |
+|--------|------|-------------|------------|
+| device_id | INTEGER | Reference to device_sentinel | PK, FK |
+| reading_ts | TEXT | Reading timestamp (naive UTC ISO) | PK |
+| pm1 | REAL | PM1.0 (ug/m3) | - |
+| pm2_5 | REAL | PM2.5 (ug/m3) | - |
+| pm4 | REAL | PM4.0 (ug/m3, sensor-derived) | - |
+| pm10 | REAL | PM10 (ug/m3, sensor-derived) | - |
+| co2 | REAL | CO2 reading (ppm) | - |
+| humidity | REAL | Humidity reading (%) | - |
+| temp | REAL | Temperature reading (Celsius) | - |
+| voc | REAL | Sensirion VOC index (1-500, 100 = typical) | - |
+| nox | REAL | Sensirion NOx index (1-500, 1 = baseline) | - |
+| pressure_hpa | REAL | Barometric pressure (hPa) | - |
+
+**Indexes**:
+- `idx_readings_sentinel_device_id`: For filtering by device
+- `idx_readings_sentinel_timestamp`: For time-based queries
+- `idx_readings_sentinel_device_time`: Composite index for device+time queries
 
 #### readings_hyphae
 Stores relay state changes from Hyphae devices.
@@ -484,3 +533,9 @@ The schema is designed to evolve over time:
 - Tables include created_at/updated_at timestamps for tracking changes
 - Foreign key constraints are explicitly defined for integrity
 - The schema allows for future extensions without breaking existing functionality
+
+There is no migration framework. `storage/initialize_database.py::apply_migrations()` runs on every startup and idempotently brings an older database up to date in three steps:
+
+1. **device_type CHECK rebuild (v2.8.0)**: `firmware_versions`, `ota_history`, `device_health_log` and `device_pins` carry `CHECK(device_type IN ('spore', 'hyphae', 'sentinel'))`. Databases created before v2.8.0 lack `'sentinel'`, and SQLite cannot ALTER a CHECK, so each such table is rebuilt once (create under a temporary name from the schema script, copy by explicit column list so ids are preserved, drop the old table, rename) inside a single transaction. Detection reads `sqlite_master`, so this never runs twice.
+2. **Schema script re-run**: `create_unified_database.sql` is entirely `CREATE ... IF NOT EXISTS`, so re-running it creates any tables and indexes added since the database was made (including the indexes dropped with the rebuilt tables above).
+3. **Column additions**: the `_COLUMN_ADDITIONS` list adds columns appended to existing tables with `ALTER TABLE ... ADD COLUMN`.
