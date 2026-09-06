@@ -52,7 +52,7 @@ Mycelium/
 │   │   ├── devices_sentinel.py # Sentinel tab/detail panels (imported lazily by devices.py)
 │   │   ├── farm_overview.py    # Farm/room CRUD
 │   │   ├── alerts.py           # Alert rules + history
-│   │   ├── analytics.py        # Notebook-style analysis
+│   │   ├── analytics.py        # Dashboard (per-device panels by Room/Spore/Sentinel), Graph Builder, Records
 │   │   ├── business.py         # Business operations
 │   │   ├── fleet_management.py # Firmware upload + batch OTA
 │   │   ├── health_dashboard.py # Device health overview

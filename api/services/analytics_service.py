@@ -16,22 +16,36 @@ from storage.db_utils import execute_query
 
 @dataclass
 class EnvironmentalStats:
-    """Statistics for environmental data over a period."""
+    """Statistics for environmental data over a period.
 
-    co2_mean: float
-    co2_min: float
-    co2_max: float
-    co2_std: float
-    temp_mean: float
-    temp_min: float
-    temp_max: float
-    temp_std: float
-    humidity_mean: float
-    humidity_min: float
-    humidity_max: float
-    humidity_std: float
+    Every metric is computed independently and is None when the readings
+    carry no value for it (a Sentinel reports null for an unavailable
+    channel; a Spore never reports PM2.5).
+    """
+
+    co2_mean: Optional[float]
+    co2_min: Optional[float]
+    co2_max: Optional[float]
+    co2_std: Optional[float]
+    temp_mean: Optional[float]
+    temp_min: Optional[float]
+    temp_max: Optional[float]
+    temp_std: Optional[float]
+    humidity_mean: Optional[float]
+    humidity_min: Optional[float]
+    humidity_max: Optional[float]
+    humidity_std: Optional[float]
     data_points: int
     days: int
+    pm25_mean: Optional[float] = None
+    pm25_max: Optional[float] = None
+
+
+# EPA 2024 PM2.5 24-hour breakpoints (ug/m3): the top of the "Good" band and
+# the top of "Moderate". Kept in step with PM25_AQI_BANDS in web_ui.format,
+# which owns the full band table for display.
+PM25_GOOD_MAX = 9.0
+PM25_MODERATE_MAX = 35.4
 
 
 @dataclass
@@ -93,6 +107,7 @@ class AnalyticsService:
         """
         query = """
         SELECT
+            'spore' AS source,
             rs.device_id,
             rs.reading_ts as timestamp,
             rs.co2,
@@ -117,6 +132,67 @@ class AnalyticsService:
             params.append(device_id)
 
         query += " ORDER BY rs.reading_ts ASC"
+
+        return execute_query(query, tuple(params))
+
+    def get_sentinel_readings_for_period(
+        self,
+        start_date: str,
+        end_date: str,
+        room_id: Optional[int] = None,
+        device_id: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Get Sentinel readings for a specified period.
+
+        Same row shape as get_readings_for_period (source, device_id,
+        timestamp, co2, temperature, humidity, device_name, room_id,
+        room_name) plus the Sentinel-only channels pm1, pm2_5, pm4, pm10,
+        voc, nox and pressure_hpa. Unavailable channels are None.
+
+        Args:
+            start_date (str): Start date (YYYY-MM-DD or ISO format)
+            end_date (str): End date (YYYY-MM-DD or ISO format)
+            room_id (int, optional): Filter by room ID
+            device_id (int, optional): Filter by specific device
+
+        Returns:
+            List[Dict]: List of reading records
+        """
+        query = """
+        SELECT
+            'sentinel' AS source,
+            rsn.device_id,
+            rsn.reading_ts as timestamp,
+            rsn.co2,
+            rsn.temp as temperature,
+            rsn.humidity,
+            rsn.pm1,
+            rsn.pm2_5,
+            rsn.pm4,
+            rsn.pm10,
+            rsn.voc,
+            rsn.nox,
+            rsn.pressure_hpa,
+            dsn.device_name,
+            dsn.room_id,
+            gr.room_name
+        FROM readings_sentinel rsn
+        JOIN device_sentinel dsn ON rsn.device_id = dsn.device_id
+        LEFT JOIN grow_rooms gr ON dsn.room_id = gr.room_id
+        WHERE rsn.reading_ts >= ? AND rsn.reading_ts <= ?
+        """
+        params = [start_date, _end_of_day(end_date)]
+
+        if room_id is not None:
+            query += " AND dsn.room_id = ?"
+            params.append(room_id)
+
+        if device_id is not None:
+            query += " AND rsn.device_id = ?"
+            params.append(device_id)
+
+        query += " ORDER BY rsn.reading_ts ASC"
 
         return execute_query(query, tuple(params))
 
@@ -214,16 +290,18 @@ class AnalyticsService:
         if not readings:
             return None
 
-        co2_values = [r["co2"] for r in readings if r.get("co2") is not None]
-        temp_values = [
-            r["temperature"] for r in readings if r.get("temperature") is not None
-        ]
-        humidity_values = [
-            r["humidity"] for r in readings if r.get("humidity") is not None
-        ]
+        def _summary(key):
+            """(mean, min, max, std) for one metric, or four Nones if absent."""
+            values = [r[key] for r in readings if r.get(key) is not None]
+            if not values:
+                return None, None, None, None
+            std = statistics.stdev(values) if len(values) > 1 else 0
+            return statistics.mean(values), min(values), max(values), std
 
-        if not co2_values or not temp_values or not humidity_values:
-            return None
+        co2 = _summary("co2")
+        temp = _summary("temperature")
+        humidity = _summary("humidity")
+        pm25 = _summary("pm2_5")
 
         # Calculate days covered
         try:
@@ -238,22 +316,22 @@ class AnalyticsService:
             days = 1
 
         return EnvironmentalStats(
-            co2_mean=statistics.mean(co2_values),
-            co2_min=min(co2_values),
-            co2_max=max(co2_values),
-            co2_std=statistics.stdev(co2_values) if len(co2_values) > 1 else 0,
-            temp_mean=statistics.mean(temp_values),
-            temp_min=min(temp_values),
-            temp_max=max(temp_values),
-            temp_std=statistics.stdev(temp_values) if len(temp_values) > 1 else 0,
-            humidity_mean=statistics.mean(humidity_values),
-            humidity_min=min(humidity_values),
-            humidity_max=max(humidity_values),
-            humidity_std=statistics.stdev(humidity_values)
-            if len(humidity_values) > 1
-            else 0,
+            co2_mean=co2[0],
+            co2_min=co2[1],
+            co2_max=co2[2],
+            co2_std=co2[3],
+            temp_mean=temp[0],
+            temp_min=temp[1],
+            temp_max=temp[2],
+            temp_std=temp[3],
+            humidity_mean=humidity[0],
+            humidity_min=humidity[1],
+            humidity_max=humidity[2],
+            humidity_std=humidity[3],
             data_points=len(readings),
             days=days,
+            pm25_mean=pm25[0],
+            pm25_max=pm25[2],
         )
 
     def get_harvests_for_period(
@@ -435,6 +513,7 @@ class AnalyticsService:
         readings: Optional[List[Dict[str, Any]]] = None,
         stats: Optional[EnvironmentalStats] = None,
         harvests: Optional[List[Dict[str, Any]]] = None,
+        source: str = "spore",
     ) -> List[Insight]:
         """
         Generate automated insights from historical data.
@@ -449,7 +528,12 @@ class AnalyticsService:
             stats (EnvironmentalStats, optional): Pre-computed stats; computed
                 from readings when None
             harvests (list, optional): Pre-fetched harvests; fetched here
-                when None
+                when None. Pass an empty list to skip harvest insights (the
+                Analytics page adds them once via harvest_insights instead of
+                once per device).
+            source (str): 'spore' applies the grow-room rules (CO2 band,
+                temperature stability, humidity); 'sentinel' applies the
+                grower-space air-quality rules (PM2.5)
 
         Returns:
             List[Insight]: List of generated insights
@@ -458,7 +542,12 @@ class AnalyticsService:
 
         # Get environmental data
         if readings is None:
-            readings = self.get_readings_for_period(start_date, end_date, room_id)
+            if source == "sentinel":
+                readings = self.get_sentinel_readings_for_period(
+                    start_date, end_date, room_id
+                )
+            else:
+                readings = self.get_readings_for_period(start_date, end_date, room_id)
         if not readings:
             return insights
 
@@ -467,8 +556,99 @@ class AnalyticsService:
         if not stats:
             return insights
 
+        if source == "sentinel":
+            insights.extend(self._sentinel_insights(readings, stats))
+        else:
+            insights.extend(self._spore_insights(readings, stats))
+
+        # Data coverage (both sources poll on a roughly per-minute cadence,
+        # so anything under one point an hour means a device was offline)
+        if stats.data_points < stats.days * 24:
+            coverage = (
+                (stats.data_points / (stats.days * 24)) * 100 if stats.days > 0 else 0
+            )
+            if coverage < 50:
+                insights.append(
+                    Insight(
+                        type="info",
+                        title="Data Coverage Gap",
+                        message=f"Only {coverage:.0f}% data coverage for the period. Some devices may be offline.",
+                        metric="data",
+                        action="Check device connectivity and polling intervals",
+                    )
+                )
+
+        if harvests is None:
+            harvests = self.get_harvests_for_period(start_date, end_date, room_id)
+        insights.extend(self.harvest_insights(harvests))
+
+        return insights
+
+    def _sentinel_insights(
+        self, readings: List[Dict[str, Any]], stats: EnvironmentalStats
+    ) -> List[Insight]:
+        """Grower-space air-quality rules for one Sentinel's readings."""
+        insights = []
+        if stats.pm25_mean is None:
+            return insights
+
+        if stats.pm25_mean <= PM25_GOOD_MAX:
+            insights.append(
+                Insight(
+                    type="success",
+                    title="Good Air Quality",
+                    message=f"PM2.5 averaged {stats.pm25_mean:.1f} µg/m³, inside the EPA 'Good' band.",
+                    metric="pm2.5",
+                    action="No action needed",
+                )
+            )
+        elif stats.pm25_mean <= PM25_MODERATE_MAX:
+            insights.append(
+                Insight(
+                    type="info",
+                    title="Moderate Air Quality",
+                    message=f"PM2.5 averaged {stats.pm25_mean:.1f} µg/m³, in the EPA 'Moderate' band.",
+                    metric="pm2.5",
+                    action="Check filtration and spore load around the grow space",
+                )
+            )
+        else:
+            insights.append(
+                Insight(
+                    type="warning",
+                    title="Poor Air Quality",
+                    message=f"PM2.5 averaged {stats.pm25_mean:.1f} µg/m³, above the EPA 'Moderate' band.",
+                    metric="pm2.5",
+                    action="Improve filtration and ventilation; wear a respirator when handling",
+                )
+            )
+
+        pm_values = [r["pm2_5"] for r in readings if r.get("pm2_5") is not None]
+        high_count = sum(1 for v in pm_values if v > PM25_MODERATE_MAX)
+        high_pct = (high_count / len(pm_values)) * 100 if pm_values else 0
+        if high_pct > 10 and stats.pm25_mean <= PM25_MODERATE_MAX:
+            insights.append(
+                Insight(
+                    type="warning",
+                    title="Particulate Spikes",
+                    message=f"PM2.5 exceeded {PM25_MODERATE_MAX} µg/m³ about {high_pct:.0f}% of the time (peak {stats.pm25_max:.0f} µg/m³).",
+                    metric="pm2.5",
+                    action="Match the spikes against tent openings, harvests and substrate work",
+                )
+            )
+
+        return insights
+
+    def _spore_insights(
+        self, readings: List[Dict[str, Any]], stats: EnvironmentalStats
+    ) -> List[Insight]:
+        """Grow-room rules for one Spore's (or a room's) readings."""
+        insights = []
+
         # Insight 1: CO2 levels analysis
-        if stats.co2_mean < 800:
+        if stats.co2_mean is None:
+            pass
+        elif stats.co2_mean < 800:
             insights.append(
                 Insight(
                     type="warning",
@@ -500,7 +680,9 @@ class AnalyticsService:
             )
 
         # Insight 2: Temperature stability
-        if stats.temp_std > 3:
+        if stats.temp_std is None:
+            pass
+        elif stats.temp_std > 3:
             insights.append(
                 Insight(
                     type="warning",
@@ -556,25 +738,11 @@ class AnalyticsService:
                 )
             )
 
-        # Insight 4: Data coverage
-        if stats.data_points < stats.days * 24:
-            coverage = (
-                (stats.data_points / (stats.days * 24)) * 100 if stats.days > 0 else 0
-            )
-            if coverage < 50:
-                insights.append(
-                    Insight(
-                        type="info",
-                        title="Data Coverage Gap",
-                        message=f"Only {coverage:.0f}% data coverage for the period. Some devices may be offline.",
-                        metric="data",
-                        action="Check device connectivity and polling intervals",
-                    )
-                )
+        return insights
 
-        # Insight 5: Harvest analysis (if available)
-        if harvests is None:
-            harvests = self.get_harvests_for_period(start_date, end_date, room_id)
+    def harvest_insights(self, harvests: List[Dict[str, Any]]) -> List[Insight]:
+        """Yield-trend insight over a period's harvests (needs at least 3)."""
+        insights = []
         if harvests and len(harvests) >= 3:
             yields = [h["yield_weight"] for h in harvests if h.get("yield_weight")]
             if len(yields) >= 3:
@@ -629,21 +797,33 @@ class AnalyticsService:
     def get_date_range(
         self, room_id: Optional[int] = None
     ) -> Tuple[Optional[str], Optional[str]]:
-        """Get the date range of available data."""
-        query = """
-        SELECT
-            MIN(rs.reading_ts) as min_date,
-            MAX(rs.reading_ts) as max_date
-        FROM readings_spore rs
-        JOIN device_spore ds ON rs.device_id = ds.device_id
-        """
-        params = []
+        """Get the date range of available data across Spore and Sentinel readings."""
+        queries = [
+            (
+                "SELECT MIN(rs.reading_ts) as min_date, MAX(rs.reading_ts) as max_date"
+                " FROM readings_spore rs"
+                " JOIN device_spore ds ON rs.device_id = ds.device_id",
+                "ds",
+            ),
+            (
+                "SELECT MIN(rsn.reading_ts) as min_date, MAX(rsn.reading_ts) as max_date"
+                " FROM readings_sentinel rsn"
+                " JOIN device_sentinel dsn ON rsn.device_id = dsn.device_id",
+                "dsn",
+            ),
+        ]
 
-        if room_id is not None:
-            query += " WHERE ds.room_id = ?"
-            params.append(room_id)
+        mins, maxs = [], []
+        for query, alias in queries:
+            params = []
+            if room_id is not None:
+                query += f" WHERE {alias}.room_id = ?"
+                params.append(room_id)
+            result = execute_query(query, tuple(params))
+            if result and result[0]["min_date"]:
+                mins.append(result[0]["min_date"])
+                maxs.append(result[0]["max_date"])
 
-        result = execute_query(query, tuple(params))
-        if result and result[0]["min_date"]:
-            return result[0]["min_date"], result[0]["max_date"]
+        if mins:
+            return min(mins), max(maxs)
         return None, None

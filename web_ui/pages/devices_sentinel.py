@@ -607,8 +607,9 @@ def _sentinel_room_card(device: Dict):
     with ui.card().classes("w-full p-4 q-mb-md"):
         ui.label("Room Assignment").classes("text-h6 q-mb-sm")
         ui.label(
-            "A Sentinel usually monitors the grower's air outside the tents. "
-            "Assign a room only if this unit lives inside one."
+            "Assign the room this Sentinel monitors. On the Analytics page a "
+            "room shows every Spore and Sentinel assigned to it side by side; "
+            "an unassigned Sentinel is still selectable there by name."
         ).classes("text-caption text-muted q-mb-sm")
 
         room_opts = {0: "— None —", **_room_options()}

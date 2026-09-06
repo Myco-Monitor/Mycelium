@@ -9,14 +9,14 @@ raw readings). No code execution.
 import csv
 import io
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 import plotly.graph_objects as go
 from nicegui import ui, app, run
 
 from web_ui.layout import page_layout, back_to_dashboard
 from web_ui.theme import get_colors
-from web_ui.format import to_user_dt
+from web_ui.format import to_user_dt, pm25_aqi_band
 
 from storage.tables import (
     readings_spore,
@@ -173,13 +173,6 @@ def _chart_ts(value):
     return dt.replace(tzinfo=None) if dt else value
 
 
-def _utc_offset_hours() -> int:
-    """The user timezone's current whole-hour offset from UTC."""
-    dt = to_user_dt(datetime.now(timezone.utc))
-    off = dt.utcoffset() if dt else None
-    return round(off.total_seconds() / 3600) if off else 0
-
-
 def _build_env_trends_chart(readings, colors, temp_pref="C"):
     """Build a plotly time-series chart for environmental trends."""
     if not readings:
@@ -272,49 +265,40 @@ def _build_harvest_chart(harvests, colors):
     return fig
 
 
-def _build_hourly_chart(hourly_data, field, title, color, value_transform=None):
-    """Build a plotly chart for hourly pattern data.
+def _build_air_quality_chart(readings, colors):
+    """Sentinel air-quality time series: PM2.5 / PM10 (µg/m³) and VOC / NOx (index)."""
+    if not readings:
+        return _empty_figure("No air-quality data for selected period")
 
-    value_transform, if given, maps each raw value (e.g. Celsius -> the user's
-    preferred temperature unit) before plotting.
-    """
-    if not hourly_data:
-        return _empty_figure(f"No hourly {title.lower()} data")
-
-    # Stored hours are UTC buckets; shift by the user timezone's current
-    # offset so "Hour of Day" reads in local time (approximate across DST).
-    offset = _utc_offset_hours()
-    shifted = sorted(
-        ((h.get("hour", 0) + offset) % 24, h.get(field, 0) or 0) for h in hourly_data
-    )
-    hours = [h for h, _v in shifted]
-    values = [v for _h, v in shifted]
-    if value_transform:
-        values = [value_transform(v) for v in values]
-    hour_labels = [f"{h:02d}:00" for h in hours]
+    timestamps = [_chart_ts(r.get("timestamp", "")) for r in readings]
+    series = [
+        ("pm2_5", "PM2.5 (µg/m³)", "y", "#ffa726"),
+        ("pm10", "PM10 (µg/m³)", "y", "#ab47bc"),
+        ("voc", "VOC Index", "y2", "#26c6da"),
+        ("nox", "NOx Index", "y2", "#8d6e63"),
+    ]
 
     fig = go.Figure()
-    fig.add_trace(
-        go.Scatter(
-            x=hour_labels,
-            y=values,
-            name=title,
-            mode="lines+markers",
-            fill="tozeroy",
-            line=dict(color=color),
-            fillcolor=color.replace(")", ", 0.15)").replace("rgb", "rgba")
-            if color.startswith("rgb")
-            else color,
+    for field, label, yaxis, color in series:
+        fig.add_trace(
+            go.Scatter(
+                x=timestamps,
+                y=[r.get(field) for r in readings],
+                name=label,
+                yaxis=yaxis,
+                line=dict(color=color),
+            )
         )
-    )
+
     fig.update_layout(
         template="plotly_dark",
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
-        margin=dict(l=50, r=20, t=30, b=40),
-        xaxis=dict(title="Hour of Day"),
-        yaxis=dict(title=title),
-        showlegend=False,
+        margin=dict(l=60, r=60, t=30, b=40),
+        legend=dict(orientation="h", y=1.12),
+        xaxis=dict(title="Time"),
+        yaxis=dict(title="Particulates (µg/m³)", side="left"),
+        yaxis2=dict(title="Index", side="right", overlaying="y", showgrid=False),
     )
     return fig
 
@@ -381,11 +365,12 @@ def analytics_page():
         datetime.strptime(default_end, "%Y-%m-%d") - timedelta(days=30)
     ).strftime("%Y-%m-%d")
 
-    # Shared filter state
+    # Shared filter state; `panels` holds the last Apply's per-device results
+    # so Export CSV writes exactly what is on screen
     state = {
         "start_date": default_start,
         "end_date": default_end,
-        "room_id": None,
+        "panels": [],
     }
 
     # ---- Main tabs ----------------------------------------------------------
@@ -421,46 +406,78 @@ def analytics_page():
 # -- Dashboard panel ----------------------------------------------------------
 
 
+# Sentinel values for the Spore / Sentinel selects: every device of that kind
+# in the chosen room, or none of that kind.
+PICK_ROOM = "__room__"
+PICK_NONE = "__none__"
+
+
+def _labelled_devices(devices, source):
+    """Attach the readings source and a 'name · room' label to device rows."""
+    out = []
+    for d in devices:
+        name = d.get("device_name") or f"{source.title()} {d['device_id']}"
+        room = d.get("room_name") or "no room"
+        out.append(
+            {
+                "source": source,
+                "device_id": d["device_id"],
+                "room_id": d.get("room_id"),
+                "name": name,
+                "room": room,
+                "label": f"{name} · {room}",
+            }
+        )
+    return out
+
+
 def _build_dashboard_panel(analytics, rooms, state, colors):
-    """Construct the dashboard tab contents."""
+    """Construct the dashboard tab contents.
+
+    Scope is a room (every Spore and Sentinel assigned to it) and/or specific
+    devices: the Spore and Sentinel selects list every device Mycelium knows,
+    so a Sentinel in another room can sit alongside the tent's sensors. Each
+    selected device gets its own panel; nothing is blended across devices.
+    """
 
     # Containers that get refreshed when filters change
     content_container = ui.column().classes("w-full gap-4")
 
+    spores, sentinels = [], []
+    try:
+        spores = _labelled_devices(
+            device_spore.get_all_device_spore(active_only=True), "spore"
+        )
+        sentinels = _labelled_devices(
+            device_sentinel.get_all_device_sentinel(active_only=True), "sentinel"
+        )
+    except Exception as e:
+        logger.warning(f"Failed to load device lists: {e}")
+
+    room_options = {r["room_id"]: r["room_name"] for r in rooms}
+    default_room = next(iter(room_options), None)
+
+    def _pick_options(devices):
+        opts = {PICK_ROOM: "All in room", PICK_NONE: "None"}
+        for d in devices:
+            opts[d["device_id"]] = d["label"]
+        return opts
+
     # -- Filter bar -----------------------------------------------------------
     with ui.card().classes("w-full p-3"):
         with ui.row().classes("w-full items-end gap-3 flex-wrap"):
-            # Start date
-            with ui.input("Start Date", value=state["start_date"]).classes(
-                "w-40"
-            ) as start_input:
-                with ui.menu().props("no-parent-event") as start_menu:
-                    with ui.date().bind_value(start_input):
-                        pass
-                with start_input.add_slot("append"):
-                    ui.icon("edit_calendar").on("click", start_menu.open).classes(
-                        "cursor-pointer"
-                    )
+            start_input = _date_picker("Start Date", state["start_date"])
+            end_input = _date_picker("End Date", state["end_date"])
 
-            # End date
-            with ui.input("End Date", value=state["end_date"]).classes(
-                "w-40"
-            ) as end_input:
-                with ui.menu().props("no-parent-event") as end_menu:
-                    with ui.date().bind_value(end_input):
-                        pass
-                with end_input.add_slot("append"):
-                    ui.icon("edit_calendar").on("click", end_menu.open).classes(
-                        "cursor-pointer"
-                    )
-
-            # Room selector
-            room_options = {None: "All Rooms"}
-            for r in rooms:
-                room_options[r["room_id"]] = r["room_name"]
-            room_select = ui.select(room_options, value=None, label="Room").classes(
-                "w-40"
-            )
+            room_select = ui.select(
+                room_options, value=default_room, label="Room"
+            ).classes("w-40")
+            spore_select = ui.select(
+                _pick_options(spores), value=PICK_ROOM, label="Spore"
+            ).classes("w-52")
+            sentinel_select = ui.select(
+                _pick_options(sentinels), value=PICK_ROOM, label="Sentinel"
+            ).classes("w-52")
 
             # Quick range buttons — fill the date inputs only; nothing loads
             # until Apply
@@ -477,12 +494,40 @@ def _build_dashboard_panel(analytics, rooms, state, colors):
                         "flat dense size=sm"
                     )
 
+            def _selected_devices():
+                """Devices to show: the room's, or the specific picks."""
+                room_id = room_select.value
+                picks = []
+                for select, devices in (
+                    (spore_select, spores),
+                    (sentinel_select, sentinels),
+                ):
+                    value = select.value
+                    if value == PICK_NONE:
+                        continue
+                    if value == PICK_ROOM:
+                        picks.extend(
+                            d
+                            for d in devices
+                            if room_id is not None and d["room_id"] == room_id
+                        )
+                    else:
+                        picks.extend(d for d in devices if d["device_id"] == value)
+                return picks
+
             # Apply button — queries run in a worker thread so the UI stays
             # responsive; rendering happens back on the event loop
             async def _apply_filters():
                 state["start_date"] = start_input.value or state["start_date"]
                 state["end_date"] = end_input.value or state["end_date"]
-                state["room_id"] = room_select.value
+                picks = _selected_devices()
+                if not picks:
+                    ui.notify(
+                        "No devices selected — the room has none assigned; "
+                        "pick a specific Spore or Sentinel",
+                        type="warning",
+                    )
+                    return
                 n = ui.notification("Loading analytics…", spinner=True, timeout=None)
                 try:
                     data = await run.io_bound(
@@ -490,27 +535,33 @@ def _build_dashboard_panel(analytics, rooms, state, colors):
                         analytics,
                         state["start_date"],
                         state["end_date"],
-                        state["room_id"],
+                        picks,
                     )
                 finally:
                     n.dismiss()
+                state["panels"] = data["panels"]
                 _render_dashboard(content_container, data, colors)
 
             ui.button("Apply", icon="refresh", on_click=_apply_filters).props("dense")
 
-            # Export CSV
+            # Export CSV — the rows behind the panels currently on screen.
+            # Spore and Sentinel rows share the common columns; the Sentinel
+            # air-quality columns are blank on Spore rows.
             def _export_csv():
+                rows = [r for p in state["panels"] for r in p["readings"]]
+                if not rows:
+                    ui.notify("No data to export — press Apply first", type="warning")
+                    return
                 try:
-                    readings = analytics.get_readings_for_period(
-                        state["start_date"], state["end_date"], state["room_id"]
-                    )
-                    if not readings:
-                        ui.notify("No data to export", type="warning")
-                        return
+                    fieldnames = []
+                    for r in rows:
+                        for key in r.keys():
+                            if key not in fieldnames:
+                                fieldnames.append(key)
                     output = io.StringIO()
-                    writer = csv.DictWriter(output, fieldnames=readings[0].keys())
+                    writer = csv.DictWriter(output, fieldnames=fieldnames, restval="")
                     writer.writeheader()
-                    writer.writerows(readings)
+                    writer.writerows(rows)
                     ui.download(
                         output.getvalue().encode(),
                         f"analytics_{state['start_date']}_{state['end_date']}.csv",
@@ -524,52 +575,60 @@ def _build_dashboard_panel(analytics, rooms, state, colors):
 
     # No initial load — data is only fetched when the user presses Apply
     with content_container:
-        ui.label("Choose a date range and room, then Apply.").classes("text-muted p-4")
+        ui.label(
+            "Choose a date range and a room (or specific devices), then Apply."
+        ).classes("text-muted p-4")
 
 
-def _fetch_dashboard_data(analytics, start, end, room_id):
-    """Run all dashboard queries. No UI calls — safe for run.io_bound."""
-    data = {
-        "readings": [],
-        "stats": None,
-        "harvests": [],
-        "hourly": [],
-        "insights": [],
-    }
+def _fetch_dashboard_data(analytics, start, end, devices):
+    """Run all dashboard queries. No UI calls — safe for run.io_bound.
+
+    One panel per selected device: its readings, stats and source-specific
+    insights. Harvests are period-wide and fetched once.
+    """
+    data = {"panels": [], "harvests": [], "harvest_insights": []}
+
+    for dev in devices:
+        panel = {"device": dev, "readings": [], "stats": None, "insights": []}
+        try:
+            if dev["source"] == "sentinel":
+                panel["readings"] = analytics.get_sentinel_readings_for_period(
+                    start, end, device_id=dev["device_id"]
+                )
+            else:
+                panel["readings"] = analytics.get_readings_for_period(
+                    start, end, device_id=dev["device_id"]
+                )
+        except Exception as e:
+            logger.warning(f"Failed to load readings for {dev['label']}: {e}")
+
+        try:
+            panel["stats"] = analytics.calculate_environmental_stats(panel["readings"])
+        except Exception as e:
+            logger.warning(f"Failed to calculate stats for {dev['label']}: {e}")
+
+        try:
+            # Hand over what is already fetched so the readings query is not
+            # run a second time; harvests=[] keeps the yield insight out of
+            # the per-device list (it is added once below)
+            panel["insights"] = analytics.generate_insights(
+                start,
+                end,
+                readings=panel["readings"],
+                stats=panel["stats"],
+                harvests=[],
+                source=dev["source"],
+            )
+        except Exception as e:
+            logger.warning(f"Failed to generate insights for {dev['label']}: {e}")
+
+        data["panels"].append(panel)
 
     try:
-        data["readings"] = analytics.get_readings_for_period(start, end, room_id)
-    except Exception as e:
-        logger.warning(f"Failed to load readings: {e}")
-
-    try:
-        data["stats"] = analytics.calculate_environmental_stats(data["readings"])
-    except Exception as e:
-        logger.warning(f"Failed to calculate stats: {e}")
-
-    try:
-        data["harvests"] = analytics.get_harvests_for_period(start, end, room_id)
+        data["harvests"] = analytics.get_harvests_for_period(start, end)
+        data["harvest_insights"] = analytics.harvest_insights(data["harvests"])
     except Exception as e:
         logger.warning(f"Failed to load harvests: {e}")
-
-    try:
-        data["hourly"] = analytics.get_hourly_pattern(start, end, room_id)
-    except Exception as e:
-        logger.warning(f"Failed to load hourly data: {e}")
-
-    try:
-        # Hand over what is already fetched so the heavy readings query
-        # is not run a second time inside generate_insights
-        data["insights"] = analytics.generate_insights(
-            start,
-            end,
-            room_id,
-            readings=data["readings"],
-            stats=data["stats"],
-            harvests=data["harvests"],
-        )
-    except Exception as e:
-        logger.warning(f"Failed to generate insights: {e}")
 
     return data
 
@@ -578,77 +637,130 @@ def _render_dashboard(container, data, colors):
     """Clear and rebuild the dashboard content area from pre-fetched data."""
     container.clear()
 
-    readings = data["readings"]
-    stats = data["stats"]
+    panels = data["panels"]
     harvests = data["harvests"]
-    hourly = data["hourly"]
-    insights = data["insights"]
+    harvest_insights = data["harvest_insights"]
 
     with container:
         # Sub-tabs
         with ui.tabs().classes("w-full") as sub_tabs:
             env_tab = ui.tab("Environmental Trends", icon="thermostat")
             harvest_tab = ui.tab("Harvest Analysis", icon="grass")
-            pattern_tab = ui.tab("Daily Patterns", icon="schedule")
             insight_tab = ui.tab("Insights", icon="lightbulb")
 
         with ui.tab_panels(sub_tabs, value=env_tab).classes("w-full"):
             # -- Environmental Trends -----------------------------------------
+            # One panel per device, side by side on a wide screen and stacked
+            # on a narrow one
             with ui.tab_panel(env_tab):
-                _build_env_trends(stats, readings, colors)
+                with (
+                    ui.element("div")
+                    .classes("w-full gap-4")
+                    .style(
+                        "display: grid; "
+                        "grid-template-columns: repeat(auto-fit, minmax(min(100%, 600px), 1fr));"
+                    )
+                ):
+                    for panel in panels:
+                        _build_device_panel(panel, colors)
 
             # -- Harvest Analysis ---------------------------------------------
             with ui.tab_panel(harvest_tab):
                 _build_harvest_analysis(harvests, colors)
 
-            # -- Daily Patterns -----------------------------------------------
-            with ui.tab_panel(pattern_tab):
-                _build_daily_patterns(hourly, colors)
-
             # -- Insights -----------------------------------------------------
             with ui.tab_panel(insight_tab):
-                _build_insights(insights, colors)
+                _build_insights(panels, harvest_insights, colors)
 
 
 # -- Dashboard sub-sections ---------------------------------------------------
 
 
-def _stat_card(label, value, icon, colors):
-    """Render a small stat card."""
-    with ui.card().classes("p-3 flex-1 min-w-48"):
+def _stat_card(label, value, icon, colors, aqi_pm25=None):
+    """Render a small stat card; aqi_pm25 adds the EPA band chip for a PM2.5 value."""
+    with ui.card().classes("p-3 flex-1 min-w-40"):
         with ui.row().classes("items-center gap-2"):
             ui.icon(icon, size="sm").style(f"color: {colors['primary']}")
             ui.label(label).classes("text-caption text-muted")
         ui.label(str(value)).classes("text-h5 q-mt-xs")
+        band = pm25_aqi_band(aqi_pm25) if aqi_pm25 is not None else None
+        if band:
+            # Styled label rather than ui.badge: an inline background loses
+            # to Quasar's `bg-primary !important` on a badge
+            text, bg, fg = band
+            ui.label(text).classes("text-caption text-weight-bold q-px-sm").style(
+                f"background-color: {bg}; color: {fg}; border-radius: 12px;"
+            )
 
 
-def _build_env_trends(stats, readings, colors):
-    """Environmental Trends sub-tab content."""
+def _fmt_stat(value, fmt):
+    """Format a stat value, or '--' when the metric has no data."""
+    return fmt.format(value) if value is not None else "--"
+
+
+def _build_device_panel(panel, colors):
+    """One device's Environmental Trends card: stats, env chart, air quality."""
+    dev = panel["device"]
+    stats = panel["stats"]
+    readings = panel["readings"]
+    is_sentinel = dev["source"] == "sentinel"
     pref = _temp_pref()
     unit = _temp_unit(pref)
-    # Standard metric order: CO2, humidity, temp
-    with ui.row().classes("w-full gap-3 flex-wrap q-mb-md"):
-        if stats:
-            avg_temp = _to_pref_temp(stats.temp_mean, pref)
-            temp_text = f"{avg_temp:.1f} {unit}" if avg_temp is not None else "--"
-            _stat_card("Avg CO2", f"{stats.co2_mean:.0f} ppm", "co2", colors)
-            _stat_card(
-                "Avg Humidity", f"{stats.humidity_mean:.1f}%", "water_drop", colors
-            )
-            _stat_card("Avg Temp", temp_text, "thermostat", colors)
-            _stat_card("Data Points", f"{stats.data_points:,}", "data_usage", colors)
-        else:
-            _stat_card("Avg CO2", "--", "co2", colors)
-            _stat_card("Avg Humidity", "--", "water_drop", colors)
-            _stat_card("Avg Temp", "--", "thermostat", colors)
-            _stat_card("Data Points", "0", "data_usage", colors)
 
     with ui.card().classes("w-full p-3"):
-        ui.label("Environmental Trends").classes(
-            "text-subtitle1 text-weight-bold q-mb-sm"
-        )
+        with ui.row().classes("items-center gap-2 q-mb-sm"):
+            ui.icon("air" if is_sentinel else "sensors", size="sm").style(
+                f"color: {colors['primary']}"
+            )
+            ui.label(dev["name"]).classes("text-subtitle1 text-weight-bold")
+            ui.badge("Sentinel" if is_sentinel else "Spore").props("outline")
+            ui.label(dev["room"]).classes("text-caption text-muted")
+
+        # Stat cards. Sentinel leads with PM2.5 (its hero metric); then the
+        # standard order CO2, humidity, temp.
+        avg_temp = _to_pref_temp(stats.temp_mean, pref) if stats else None
+        with ui.row().classes("w-full gap-3 flex-wrap q-mb-md"):
+            if is_sentinel:
+                pm25 = stats.pm25_mean if stats else None
+                _stat_card(
+                    "Avg PM2.5",
+                    _fmt_stat(pm25, "{:.1f} µg/m³"),
+                    "air",
+                    colors,
+                    aqi_pm25=pm25,
+                )
+            _stat_card(
+                "Avg CO2",
+                _fmt_stat(stats.co2_mean if stats else None, "{:.0f} ppm"),
+                "co2",
+                colors,
+            )
+            _stat_card(
+                "Avg Humidity",
+                _fmt_stat(stats.humidity_mean if stats else None, "{:.1f}%"),
+                "water_drop",
+                colors,
+            )
+            _stat_card(
+                "Avg Temp", _fmt_stat(avg_temp, "{:.1f} " + unit), "thermostat", colors
+            )
+            _stat_card(
+                "Data Points",
+                f"{stats.data_points:,}" if stats else "0",
+                "data_usage",
+                colors,
+            )
+
+        ui.label("Environment").classes("text-subtitle2 text-weight-bold q-mb-xs")
         fig = _build_env_trends_chart(readings, colors, pref)
-        ui.plotly(fig).classes("w-full").style("height: 400px")
+        ui.plotly(fig).classes("w-full").style("height: 360px")
+
+        if is_sentinel:
+            ui.label("Air Quality").classes(
+                "text-subtitle2 text-weight-bold q-mt-md q-mb-xs"
+            )
+            fig = _build_air_quality_chart(readings, colors)
+            ui.plotly(fig).classes("w-full").style("height: 360px")
 
 
 def _build_harvest_analysis(harvests, colors):
@@ -671,41 +783,33 @@ def _build_harvest_analysis(harvests, colors):
         ui.plotly(fig).classes("w-full").style("height: 400px")
 
 
-def _build_daily_patterns(hourly, colors):
-    """Daily Patterns sub-tab content. Standard metric order: CO2, humidity, temp."""
-    with ui.row().classes("w-full gap-3 flex-wrap"):
-        with ui.card().classes("flex-1 min-w-72 p-3"):
-            ui.label("CO2 Hourly Pattern").classes(
-                "text-subtitle1 text-weight-bold q-mb-sm"
-            )
-            fig = _build_hourly_chart(hourly, "avg_co2", "CO2 (ppm)", "#ef5350")
-            ui.plotly(fig).classes("w-full").style("height: 300px")
-
-        with ui.card().classes("flex-1 min-w-72 p-3"):
-            ui.label("Humidity Hourly Pattern").classes(
-                "text-subtitle1 text-weight-bold q-mb-sm"
-            )
-            fig = _build_hourly_chart(hourly, "avg_humidity", "Humidity (%)", "#66bb6a")
-            ui.plotly(fig).classes("w-full").style("height: 300px")
-
-        with ui.card().classes("flex-1 min-w-72 p-3"):
-            ui.label("Temperature Hourly Pattern").classes(
-                "text-subtitle1 text-weight-bold q-mb-sm"
-            )
-            pref = _temp_pref()
-            fig = _build_hourly_chart(
-                hourly,
-                "avg_temp",
-                f"Temp ({_temp_unit(pref)})",
-                "#42a5f5",
-                value_transform=(lambda c: _to_pref_temp(c, pref)),
-            )
-            ui.plotly(fig).classes("w-full").style("height: 300px")
+INSIGHT_ICONS = {
+    "success": ("check_circle", "positive"),
+    "warning": ("warning", "warning"),
+    "info": ("info", "info"),
+    "danger": ("error", "negative"),
+}
 
 
-def _build_insights(insights, colors):
-    """Insights sub-tab content."""
-    if not insights:
+def _insight_card(insight):
+    """Render one Insight as a card."""
+    icon, badge_type = INSIGHT_ICONS.get(insight.type, ("info", "info"))
+    with ui.card().classes("w-full p-4 q-mb-sm"):
+        with ui.row().classes("items-start gap-3"):
+            ui.icon(icon, size="sm").props(f"color={badge_type}")
+            with ui.column().classes("gap-1 flex-1"):
+                ui.label(insight.title).classes("text-subtitle1 text-weight-bold")
+                ui.label(insight.message).classes("text-body2")
+                with ui.row().classes("items-center gap-2 q-mt-xs"):
+                    ui.badge(insight.metric.upper()).props(
+                        f"color={badge_type} outline"
+                    )
+                    ui.label(insight.action).classes("text-caption text-muted")
+
+
+def _build_insights(panels, harvest_insights, colors):
+    """Insights sub-tab content: a section per device, then harvests."""
+    if not harvest_insights and not any(p["insights"] for p in panels):
         with ui.card().classes("w-full p-4"):
             ui.label("No insights available for the selected period.").classes(
                 "text-muted"
@@ -715,26 +819,20 @@ def _build_insights(insights, colors):
             ).classes("text-caption text-muted q-mt-sm")
         return
 
-    insight_icons = {
-        "success": ("check_circle", "positive"),
-        "warning": ("warning", "warning"),
-        "info": ("info", "info"),
-        "danger": ("error", "negative"),
-    }
+    for panel in panels:
+        if not panel["insights"]:
+            continue
+        dev = panel["device"]
+        with ui.row().classes("items-center gap-2 q-mt-sm q-mb-xs"):
+            ui.label(dev["name"]).classes("text-subtitle1 text-weight-bold")
+            ui.label(dev["room"]).classes("text-caption text-muted")
+        for insight in panel["insights"]:
+            _insight_card(insight)
 
-    for insight in insights:
-        icon, badge_type = insight_icons.get(insight.type, ("info", "info"))
-        with ui.card().classes("w-full p-4 q-mb-sm"):
-            with ui.row().classes("items-start gap-3"):
-                ui.icon(icon, size="sm").props(f"color={badge_type}")
-                with ui.column().classes("gap-1 flex-1"):
-                    ui.label(insight.title).classes("text-subtitle1 text-weight-bold")
-                    ui.label(insight.message).classes("text-body2")
-                    with ui.row().classes("items-center gap-2 q-mt-xs"):
-                        ui.badge(insight.metric.upper()).props(
-                            f"color={badge_type} outline"
-                        )
-                        ui.label(insight.action).classes("text-caption text-muted")
+    if harvest_insights:
+        ui.label("Harvests").classes("text-subtitle1 text-weight-bold q-mt-sm q-mb-xs")
+        for insight in harvest_insights:
+            _insight_card(insight)
 
 
 # -- Shared filter-bar helpers (Graph Builder + Records) ----------------------
@@ -755,11 +853,13 @@ def _date_picker(label: str, value: str):
 
 
 def _device_options(source: dict) -> dict:
-    """{device_id: device_name} options for a source's device list."""
+    """{device_id: 'name · room'} options for a source's device list."""
     options = {}
     try:
         for d in source["device_fn"]():
-            options[d["device_id"]] = d.get("device_name") or f"Device {d['device_id']}"
+            name = d.get("device_name") or f"Device {d['device_id']}"
+            room = d.get("room_name") or "no room"
+            options[d["device_id"]] = f"{name} · {room}"
     except Exception as e:
         logger.warning(f"Failed to load device list: {e}")
     return options
