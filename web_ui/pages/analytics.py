@@ -739,8 +739,9 @@ def _build_data_panel(colors):
     today = datetime.now().strftime("%Y-%m-%d")
     default_start = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
 
-    # Selection shared by Preview / Download / Delete so they act on the same set.
-    sel = {"rows": [], "total": 0}
+    # Row count from the last Preview; Delete refuses to run without one so the
+    # confirmation can quote exactly what it is about to remove.
+    sel = {"total": 0}
 
     with ui.card().classes("w-full p-3"):
         with ui.row().classes("w-full items-end gap-3 flex-wrap"):
@@ -781,6 +782,10 @@ def _build_data_panel(colors):
             ui.button("Preview", icon="search", on_click=lambda: _preview()).props(
                 "dense"
             )
+            # Download runs the same query itself — no Preview needed first
+            ui.button(
+                "Download CSV", icon="download", on_click=lambda: _download()
+            ).props("dense outline")
 
     # Preview table sits under the filter bar and is rebuilt on every Preview
     preview_container = ui.column().classes("w-full gap-2")
@@ -796,11 +801,16 @@ def _build_data_panel(colors):
         return [device_select.value]
 
     def _collect_rows(source):
-        """Fetch matching rows across all target devices (chronological)."""
-        rows = []
+        """Fetch matching rows across all target devices (chronological per device).
+
+        Returns (rows, capped) where capped lists the device ids that hit
+        READINGS_QUERY_LIMIT, so callers can warn that only their newest rows
+        were fetched.
+        """
+        rows, capped = [], []
         for dev_id in _target_ids(source):
             try:
-                got, _ = _query_readings(
+                got, truncated = _query_readings(
                     source,
                     dev_id,
                     start_input.value,
@@ -808,9 +818,17 @@ def _build_data_panel(colors):
                     relay=relay_select.value if source["has_relay"] else None,
                 )
                 rows.extend(got)
+                if truncated:
+                    capped.append(dev_id)
             except Exception as e:
                 logger.warning(f"Failed to query device {dev_id}: {e}")
-        return rows
+        return rows, capped
+
+    def _cap_warning(capped):
+        return (
+            f"{len(capped)} device(s) hit the {READINGS_QUERY_LIMIT:,}-row cap, so "
+            "only their newest rows are included — narrow the date range"
+        )
 
     def _scope_label(source):
         if device_select.value == "__all__":
@@ -823,22 +841,20 @@ def _build_data_panel(colors):
     def _preview():
         preview_container.clear()
         source = READINGS_SOURCES[source_select.value]
-        rows = _collect_rows(source)
-        sel["rows"] = rows
+        rows, capped = _collect_rows(source)
         sel["total"] = len(rows)
 
         with preview_container:
             with ui.row().classes("w-full items-center gap-3"):
                 ui.label(f"{len(rows):,} rows match").classes("text-subtitle2")
-                ui.button(
-                    "Download CSV", icon="download", on_click=lambda: _download()
-                ).props("dense outline")
                 if is_admin():
                     ui.button(
                         "Delete",
                         icon="delete_forever",
                         on_click=lambda: _confirm_delete(),
                     ).props("dense color=negative outline")
+            if capped:
+                ui.label(_cap_warning(capped)).classes("text-caption text-warning")
 
             if not rows:
                 ui.label("No rows for the selected filters.").classes("text-muted")
@@ -859,9 +875,11 @@ def _build_data_panel(colors):
             ).props("dense")
 
     def _download():
-        rows = sel["rows"]
+        """Query the current filters and download every matching row as CSV."""
+        source = READINGS_SOURCES[source_select.value]
+        rows, capped = _collect_rows(source)
         if not rows:
-            ui.notify("No data to export", type="warning")
+            ui.notify("No rows for the selected filters", type="warning")
             return
         output = io.StringIO()
         writer = csv.DictWriter(output, fieldnames=rows[0].keys())
@@ -872,6 +890,9 @@ def _build_data_panel(colors):
             output.getvalue().encode(),
             f"{source_select.value}_{scope}_{start_input.value}_{end_input.value}.csv",
         )
+        ui.notify(f"Downloaded {len(rows):,} rows", type="positive")
+        if capped:
+            ui.notify(_cap_warning(capped), type="warning")
 
     def _confirm_delete():
         if not is_admin():
