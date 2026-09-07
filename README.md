@@ -2,63 +2,75 @@
 
 **Mycelium** is the central monitoring, control, and data platform for the **Myco-Monitor** ecosystem — a modular system for precision environmental monitoring in mushroom cultivation.
 
-Mycelium runs locally on a desktop, laptop, or Raspberry Pi 4. It discovers and communicates with network-connected **Spore** (sensor), **Hyphae** (controller) and **Sentinel** (grower-air quality) devices over HTTPS, stores data in SQLite, and provides a reactive web dashboard built on NiceGUI.
+Mycelium runs locally on a desktop, laptop, or Raspberry Pi. It discovers and polls network-connected **Spore** (sensor), **Hyphae** (controller) and **Sentinel** (grower-air quality) devices over HTTPS, stores every reading in SQLite, and serves a reactive web dashboard built on NiceGUI. All data stays on your network — there is no cloud dependency.
 
 ---
 
 ## Features
 
-### Environmental Monitoring
-- HTTPS communication with CSP-provisioned device certificates
-- mDNS device discovery (`spore-NNNN.local`, `hyphae-NNNN.local`, `sentinel-NNNN.local`)
-- Real-time sensor data via WebSocket-driven UI updates
-- Timestamped logging of all readings in SQLite
-- Plotly-based visualization of CO2, temperature, humidity, pressure, and Sentinel air quality (PM1/2.5/4/10, VOC/NOx indices, EPA AQI band)
-- Configurable polling intervals and device management
-- OpenWeatherMap integration for local weather tracking on the dashboard
+### Live Dashboard
+- Device online/offline counts and active alerts at a glance
+- One card per grow tent: the Hyphae controller plus its linked Spores, with averaged CO2 / humidity / temperature, barometric pressure from the Hyphae BMP581, and a per-Spore snapshot
+- **Grower Environment**: one card per Sentinel air-quality monitor (PM1 / PM2.5 / PM4 / PM10, VOC and NOx indices, CO2, humidity, temperature, pressure) with the EPA AQI band for PM2.5
+- Local weather card from OpenWeatherMap (optional, needs an API key)
+- Environment metrics always render in the order CO2, humidity, temperature so values line up across every page
 
-### Centralized Device Control
-- All Spore, Hyphae and Sentinel operations from one interface
-- Relay configuration, testing, scheduling, and dynamic threshold control
-- Remote CO2 calibration orchestration
-- Ambient pressure distribution from Hyphae BMP581 to all associated Spores
-- Per-device PIN vault with encrypted storage
+### Device Management
+- mDNS discovery of `spore-NNNN.local`, `hyphae-NNNN.local` and `sentinel-NNNN.local`, or add a device by typing its hostname
+- Devices are addressed by mDNS hostname, never raw IP — the device TLS certificates are issued for the hostname
+- **Spore**: live readings, diagnostics (uptime, heap, RSSI, error log), remote CO2 calibration, and a per-Spore pressure source — the linked Hyphae's BMP581, or weather-derived station pressure (altitude-corrected) for Spores with no Hyphae
+- **Hyphae**: system info, relay configuration, live relay state, on/off schedules, dynamic threshold control
+- **Sentinel**: readings, diagnostics and management; a Sentinel sits outside the tents, so its room is optional
+- **Management tab** on every device: device credential, OTA firmware update, remove
+- Per-device credentials (an 8–64 character device password on firmware 3.6.0+, or a legacy 4–8 digit PIN) stored encrypted; the Mycelium account password is never sent to a device
 
-### OTA Firmware Management
-- Upload firmware binaries to a local inventory
-- Push firmware to individual devices or batch update across the fleet
-- Two-phase OTA protocol with progress tracking
-- OTA history log with version tracking per device
-
-### Multi-Farm Management
-- Multiple farms with individual grow rooms
-- Farm overview dashboard with device health statistics
-- Room-level device organization and associations
-
-### Alerting & Notifications
-- Configurable alert thresholds for environmental parameters
-- Alert history with acknowledgment and resolution tracking
-- Email notifications via SMTP for critical events (device offline, threshold breach) — see [docs/email_setup.md](docs/email_setup.md) (Gmail needs an App Password)
-- In-app toast notifications
+### Background Polling
+- A polling service starts with the app and collects Spore, Hyphae and Sentinel readings, Hyphae pressure, weather, and alert evaluations on independent intervals with jitter and exponential backoff
+- Every poll is logged to a device health history, with periodic diagnostics snapshots (heap, RSSI, uptime)
+- Firmware version is recorded whenever a device comes back online
+- Readings are permanent — nothing is auto-pruned; use date ranges in the UI to narrow what you look at
 
 ### Analytics
-- Interactive notebook-style code cells for ad-hoc analysis
-- Pre-built analytics dashboard with time-series charts
-- Data export capabilities
+- **Dashboard** — pick a room, Spore or Sentinel set and a date range; Environmental Trends draws one figure with a row per metric (CO2, humidity, temperature, plus PM2.5 / VOC / NOx when a Sentinel is selected) and a line per device, with per-device stats. Harvest Analysis charts yields from the harvest table.
+- **Graph Builder** — curated ad-hoc charts over any readings table (Spore, Sentinel, weather, Hyphae relay, pressure): pick a device, metrics and a chart type; up to three y-axes for mixed units. No code execution.
+- **Records** — preview and download raw readings as CSV; administrators can delete rows
+- All charts follow the light/dark theme, including hover boxes
+
+### Alerts
+- Rule types: device offline, threshold high, threshold low, device error, degraded
+- Threshold metrics: CO2, temperature, humidity (Spore and Sentinel) and PM2.5, VOC index, NOx index (Sentinel), with a persistence duration
+- Hyphae relay error codes are surfaced with plain-language explanations (CO2 uncontrollable, missing calibration credential, humidity target not reached)
+- Active alerts, history, acknowledge and resolve; notification by email (SMTP) or webhook, plus in-app toasts — see [docs/email_setup.md](docs/email_setup.md) (Gmail needs an App Password)
+
+### Fleet & OTA
+- Upload firmware binaries to a local inventory
+- Batch OTA in three steps: pick firmware, pick devices, push — with progress tracking
+- Two-phase OTA protocol (start-upload token, then streamed upload) for Spore, Hyphae and Sentinel
+- Device Versions and OTA History tabs
+
+### Health Dashboard
+- RSSI, heap, uptime, firmware version, response time, last error and online status for every device, fed by the poll-by-poll health log
+
+### Farms, Rooms & Schedules
+- Full CRUD for farms and grow rooms; each room shows its assigned devices
+- Relay schedule timeline: a 24-hour Gantt view per Hyphae (schedules are edited on the Devices page)
+
+### Accounts & Settings
+- The first account created at `/signup` becomes the administrator; further accounts are created by an admin under Settings → User Management (admins can also reset passwords)
+- Account passwords are PBKDF2-hashed with a per-user salt; self-service password change
+- Preferences: time zone, 12/24-hour clock, °C/°F
+- Weather Integration (OpenWeatherMap key) and Email Notifications (SMTP)
+- 8 colour themes with light and dark mode, matching the Spore/Hyphae device UIs
+- **Hub Updates** (managed hub appliance only): check GitHub release tags and apply an update after re-entering the account password; hidden when Mycelium runs on a laptop
 
 ### REST API
-- FastAPI-based REST API at `/api/v1/`
-- API key authentication with rate limiting
-- Device, reading, room, farm, and alert endpoints
-- Webhook registration for event-driven integrations
+- FastAPI router at `/api/v1/` with `X-API-Key` header authentication (keys stored as SHA-256 hashes) and per-key rate limiting
+- Endpoints: `health`, `devices`, `devices/{type}/{id}`, `readings/{type}/{id}` and `/latest`, `rooms`, `farms`, `alerts`, `alerts/{id}/acknowledge`, `alerts/{id}/resolve`
+- There is no UI for issuing API keys yet; a key must be inserted into the `api_keys` table by hand
 
-### Business Management
-- Production tracking (spawn batches, substrates, harvests)
-- Inventory management (costs, suppliers, stock levels)
-- Sales and customer relationship management
-- Employee and labour tracking
-- Financial reporting and business intelligence
-- All data stays local — no cloud required
+### Business (scaffold)
+- The Business page is a KPI/navigation dashboard; most management sections are placeholders
+- The schema for production (spawn, bulk, harvest), sales, cost and loss of goods, employees and labour exists, but the data-entry pages are not built yet — see [docs/business_page.md](docs/business_page.md) for the design
 
 ---
 
@@ -67,38 +79,51 @@ Mycelium runs locally on a desktop, laptop, or Raspberry Pi 4. It discovers and 
 ```plaintext
 Mycelium/
 ├── api/
-│   ├── clients/            # HTTP clients for device communication (HTTPS + mDNS)
-│   ├── services/           # Business logic, OTA, discovery, weather, email, etc.
-│   └── rest_api_fastapi.py # FastAPI REST API router
-├── web_ui/                 # NiceGUI web application
-│   ├── app.py              # App entry point, middleware, lifecycle
-│   ├── theme.py            # 8-color theme system + dark/light mode
-│   ├── layout.py           # Shared header, nav drawer, back button
-│   ├── auth.py             # Login, signup, logout pages
-│   ├── pages/              # All application pages
-│   │   ├── dashboard.py    # Main dashboard with stats + weather
-│   │   ├── devices.py      # Device management + control
-│   │   ├── farm_overview.py # Farm and room management
-│   │   ├── alerts.py       # Alert rules and history
-│   │   ├── analytics.py    # Notebook-style analytics
-│   │   ├── business.py     # Business operations dashboard
-│   │   ├── fleet_management.py # Firmware upload + OTA management
-│   │   ├── health_dashboard.py # Device health overview
-│   │   ├── relay_scheduler.py  # Visual relay schedule editor
-│   │   └── settings.py     # User profile, preferences, SMTP config
-│   └── components/         # Reusable UI components (weather card, etc.)
+│   ├── clients/                # aiohttp HTTPS clients: spore, hyphae, sentinel, pressure, weather
+│   ├── services/               # polling, discovery, alerts, OTA, calibration, pressure
+│   │                           # distribution, weather, email/webhook notifications, hub update
+│   └── rest_api_fastapi.py     # /api/v1 REST router
+├── web_ui/                     # NiceGUI web application
+│   ├── app.py                  # App entry, page imports, REST router, polling lifecycle
+│   ├── auth.py                 # Login, signup, logout
+│   ├── layout.py               # Shared header, nav drawer, back button
+│   ├── theme.py                # 8 colour themes, light/dark mode, shared chart layout
+│   ├── format.py               # Timestamp / unit formatting, AQI helper
+│   ├── updates.py              # Managed-appliance detection for Hub Updates
+│   ├── components/             # Reusable widgets (weather card)
+│   └── pages/
+│       ├── dashboard.py        # Live farm overview
+│       ├── devices.py          # Spore / Hyphae / Sentinel management and control
+│       ├── devices_sentinel.py # Sentinel panels (used by devices.py)
+│       ├── farm_overview.py    # Farms and rooms
+│       ├── alerts.py           # Alert rules, active alerts, history
+│       ├── analytics.py        # Dashboard, Graph Builder, Records
+│       ├── fleet_management.py # Firmware inventory, batch OTA, versions, history
+│       ├── health_dashboard.py # Device health metrics
+│       ├── relay_scheduler.py  # Relay schedule timeline
+│       ├── business.py         # Business dashboard scaffold
+│       └── settings.py         # Profile, preferences, weather, email, users, hub updates
 ├── storage/
-│   ├── tables/             # Database table operations (30+ modules)
-│   ├── migrations/         # Schema migration scripts
+│   ├── tables/                 # One module per table (devices, readings, alerts, business, ...)
 │   ├── create_unified_database.sql
-│   └── db_utils.py         # SQLite utilities (WAL mode, parameterized queries)
+│   ├── initialize_database.py  # Creates the DB and applies additive migrations on startup
+│   ├── db_utils.py             # SQLite helpers (WAL mode, parameterized queries)
+│   └── crypto.py               # Fernet encryption for secrets at rest
 ├── config/
-│   ├── app_config.json     # Application configuration
-│   └── ca_root.pem         # Myco-Monitor CA root certificate
-├── data/                   # SQLite DB, firmware binaries, exports
-├── run.py                  # Application entry point
-├── setup.py                # Setup and installation script
-└── requirements.txt        # Python dependencies
+│   ├── app_config.json         # App name/host/port and polling intervals
+│   └── ca_root.pem             # Myco-Monitor device CA root certificate
+├── data/                       # SQLite DB, firmware binaries, encryption keys (gitignored)
+├── docs/                       # Deployment, email, certificates, schema, design notes
+├── deploy/mycelium-update.sh   # Privileged updater used by the hub appliance
+├── scripts/release.sh          # Tag-and-push release helper
+├── cert_manager.py             # Per-install local CA and web-UI certificate
+├── mdns_advertise.py           # Advertises mycelium.local
+├── run.py                      # Application entry point
+├── setup.py                    # Environment setup and database initialization
+├── version.py                  # Single source of truth for the app version
+├── Makefile                    # setup-venv / setup-conda / run / dev / release shortcuts
+├── SECURITY.md                 # Security policy and model summary
+└── requirements.txt            # Python dependencies
 ```
 
 ---
@@ -106,16 +131,16 @@ Mycelium/
 ## Quick Start
 
 ### Prerequisites
-- Python 3.9 or later
+- Python 3.9 or later (Python 3.13 is supported)
 - pip for managing dependencies
-- Local network access to Spore and Hyphae devices (optional)
+- Local network access to Spore, Hyphae and Sentinel devices (optional)
 
 ### Installation & Setup
 
 1. **Clone the repository:**
    ```bash
-   git clone https://github.com/your-org/myco-monitor.git
-   cd myco-monitor/Mycelium
+   git clone https://github.com/Myco-Monitor/Mycelium.git
+   cd Mycelium
    ```
 
 2. **Run the setup script:**
@@ -135,6 +160,8 @@ Mycelium/
    python setup.py --env-type venv --reset-db
    ```
 
+   `make setup-venv` / `make setup-conda` wrap the same steps.
+
 3. **Activate the environment:**
    ```bash
    # virtualenv
@@ -152,9 +179,10 @@ Mycelium/
    ```bash
    python run.py
    ```
-   Serves HTTPS on port 8443, encrypts logins, auto-generates a self-signed
+   Serves HTTPS on port 8443, encrypts logins, auto-generates a per-install
    certificate on first run, and advertises `mycelium.local` over mDNS so any
-   computer on the LAN can reach it.
+   computer on the LAN can reach it. Schema migrations run automatically on
+   every start.
 
    Same machine only (loopback) — opt in with `--localhost`:
    ```bash
@@ -190,12 +218,20 @@ Mycelium/
    > **On an Android phone/tablet, `mycelium.local` may not load** — Android has
    > no system-wide `.local` (mDNS) resolver. Use the host's IP instead
    > (`https://<mycelium-host-ip>:8443`); it works the same and the cert covers it.
-   > See [docs/deployment.md](docs/deployment.md#mycelium-local) for details.
+   > See [docs/deployment.md](docs/deployment.md#myceliumlocal) for details.
    >
    > First HTTPS run generates a per-install **local CA**. On **each device you
    > browse from**, import `config/mycelium_local_ca.pem` into the browser once
    > (like `ca_root.pem`) for warning-free HTTPS — or just accept the one-time
    > warning. See [docs/deployment.md](docs/deployment.md).
+
+6. **Create the first account** at `/signup`. The first account becomes the
+   administrator; after that, new accounts are created from Settings → User
+   Management.
+
+7. **Add your devices** on the Devices page: run mDNS discovery, or type a
+   hostname such as `spore-1234` together with its device password (or legacy
+   PIN). Link each Spore to its Hyphae and assign devices to rooms from there.
 
 ---
 
@@ -209,8 +245,9 @@ Options:
   --localhost     Bind to loopback only (127.0.0.1); reachable from this PC only
   --port PORT     Port to bind to (default: 8443 HTTPS / 8051 with --http)
   --debug         Enable debug mode
-  --dev           Development mode (hot reload, verbose logging)
+  --dev           Development mode (auto-reload, verbose logging)
   --http          Serve over plain HTTP instead of HTTPS (INSECURE)
+  --https         Serve over HTTPS (the default; accepted for symmetry)
   --cert PATH     TLS certificate (PEM); implies HTTPS
   --key PATH      TLS private key (PEM)
 ```
@@ -226,46 +263,90 @@ at rest, host hardening).
 
 | Page | Route | Description |
 |------|-------|-------------|
-| Dashboard | `/main` | Live farm overview, device stats, weather card |
-| Devices | `/devices` | Device management, control, mDNS discovery |
-| Farm Overview | `/farms` | Farm and room CRUD, health statistics |
-| Alerts | `/alerts` | Alert rules, history, acknowledge/resolve |
-| Analytics | `/analytics` | Notebook-style data analysis with Plotly |
-| Business | `/business` | Production, sales, inventory, financials |
-| Fleet | `/fleet` | Firmware upload, batch OTA, version tracking |
-| Health | `/health` | Device health metrics (RSSI, heap, uptime) |
-| Schedules | `/relay-scheduler` | Visual relay schedule editor |
-| Settings | `/settings` | User profile, preferences, weather API, SMTP email ([setup](docs/email_setup.md)) |
+| Dashboard | `/dashboard` | Live farm overview: per-tent cards, Grower Environment, weather, alerts |
+| Devices | `/devices` | Spore / Hyphae / Sentinel discovery, control, credentials, OTA |
+| Farm Overview | `/farms` | Farm and room CRUD with device counts |
+| Alerts | `/alerts` | Active alerts, history, rules |
+| Analytics | `/analytics` | Device comparison charts, Graph Builder, raw records |
+| Fleet | `/fleet` | Firmware inventory, batch OTA, device versions, OTA history |
+| Health | `/health` | RSSI, heap, uptime, firmware, response time, last error |
+| Schedules | `/relay-scheduler` | 24-hour relay schedule timeline per Hyphae |
+| Business | `/business` | Business dashboard scaffold |
+| Settings | `/settings` | Profile, password, preferences, weather, email ([setup](docs/email_setup.md)), users, hub updates |
 
 ---
 
 ## Configuration
 
-Application settings are in `config/app_config.json`:
+Only the `app` and `polling` sections of `config/app_config.json` are read by the code:
 
 ```json
 {
-  "app": { "name": "Mycelium Farm Monitor", "port": 8051 },
-  "tls": { "ca_cert_path": "config/ca_root.pem", "verify_ssl": true },
-  "discovery": { "mdns_enabled": true, "cidr_fallback": true, "scan_port": 443 },
-  "devices": { "polling_interval_seconds": 30, "timeout_seconds": 10 }
+  "app": { "name": "Mycelium Farm Monitor", "debug": false, "host": "0.0.0.0", "port": 8051 },
+  "polling": {
+    "spore":    { "interval": 60,   "jitter": 5,  "backoff_factor": 2, "max_backoff": 3600,  "enabled": true },
+    "hyphae":   { "interval": 60,   "jitter": 5,  "backoff_factor": 2, "max_backoff": 3600,  "enabled": true },
+    "sentinel": { "interval": 60,   "jitter": 5,  "backoff_factor": 2, "max_backoff": 3600,  "enabled": true },
+    "weather":  { "interval": 1800, "jitter": 60, "backoff_factor": 2, "max_backoff": 14400, "enabled": true },
+    "pressure": { "interval": 300,  "jitter": 30, "backoff_factor": 2, "max_backoff": 3600,  "enabled": true },
+    "alerts":   { "interval": 60,   "jitter": 5,  "enabled": true }
+  }
 }
 ```
+
+Intervals are in seconds. The device CA path (`config/ca_root.pem`), the HTTPS
+device port (443) and mDNS discovery are fixed in code. The app version lives in
+`version.py`, not in config. Per-user settings (time zone, units, OpenWeatherMap
+key, SMTP) are edited on the Settings page and stored in the database.
 
 ---
 
 ## Security
 
 - **HTTPS for the web UI on by default** (opt out with `--http`) — per-install
-  local CA you import once (mkcert-style), or bring your own cert
-- HTTPS-only device communication using CSP-provisioned certificates (`ca_root.pem`)
-- **Secrets encrypted at rest** — device PINs, SMTP password, and OWM API key via
-  Fernet; session-signing key auto-generated per install (no secrets to set by hand)
-- API key authentication with SHA-256 hashing for REST API
-- Rate limiting on API endpoints
-- All data stays local — no cloud dependency
+  local CA you import once (mkcert-style), or bring your own cert with `--cert`/`--key`
+- **HTTPS-only device communication** using CSP-provisioned device certificates
+  (`config/ca_root.pem`), addressed by mDNS hostname so certificate validation holds
+- **Secrets encrypted at rest** — device credentials, the SMTP password and the
+  OpenWeatherMap API key are Fernet-encrypted with a per-install key; the
+  session-signing key is generated automatically. All of it lives in the
+  gitignored `data/` directory with owner-only permissions
+- **Account passwords** stored as PBKDF2-HMAC-SHA256 hashes with a per-user salt;
+  sensitive hub actions require re-entering the password
+- **REST API** keys stored as SHA-256 hashes, with per-key rate limiting
+- **Local-first** — no cloud dependency; your data does not leave your network
 
-See [docs/deployment.md](docs/deployment.md) for the full security model and host hardening.
+See [SECURITY.md](SECURITY.md) for the security policy and
+[docs/deployment.md](docs/deployment.md) for the full model and host hardening.
+
+---
+
+## Releases & Updates
+
+- The app version is declared once in `version.py`.
+- Releases are annotated git tags `vX.Y.Z` on this repository; `scripts/release.sh`
+  tags the current commit from `version.py` (`make release` does the same without pushing).
+- On the managed hub appliance, Settings → Hub Updates compares the running
+  version against the newest release tag and lets an administrator apply it. The
+  privileged step is delegated to `deploy/mycelium-update.sh`, which smoke-tests
+  the new checkout and rolls back on failure.
+- On a desktop install, update with `git pull` and restart.
+
+---
+
+## Documentation
+
+| Document | Contents |
+|----------|----------|
+| [docs/deployment.md](docs/deployment.md) | HTTPS for the web UI, `mycelium.local`, secrets at rest, host hardening |
+| [docs/trusting-device-certificates.md](docs/trusting-device-certificates.md) | Importing the local CA and device CA into browsers |
+| [docs/email_setup.md](docs/email_setup.md) | SMTP / Gmail App Password setup for alert email |
+| [docs/consolidated_schema.md](docs/consolidated_schema.md) | Current database schema |
+| [docs/database_schema.md](docs/database_schema.md) | Schema design notes and table descriptions |
+| [docs/data_management.md](docs/data_management.md) | Validation and time-series handling notes |
+| [docs/settings_page.md](docs/settings_page.md) | Settings page design |
+| [docs/business_page.md](docs/business_page.md) | Business page design (not yet built) |
+| [CLAUDE.md](CLAUDE.md) | Architecture, patterns and device API contract for contributors |
 
 ---
 
