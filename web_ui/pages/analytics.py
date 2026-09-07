@@ -304,7 +304,7 @@ def _empty_figure(message: str, colors):
         x=0.5,
         y=0.5,
         showarrow=False,
-        font=dict(size=16, color="grey"),
+        font=dict(size=16, color=colors["text_secondary"]),
     )
     fig.update_layout(
         **chart_layout(colors),

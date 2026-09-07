@@ -9,7 +9,7 @@ import plotly.graph_objects as go
 
 from nicegui import ui, app
 from web_ui.layout import page_layout, back_to_dashboard
-from web_ui.theme import get_colors
+from web_ui.theme import get_colors, chart_layout
 
 
 @ui.page("/relay-scheduler")
@@ -206,6 +206,7 @@ def _build_schedule_gantt(schedules: list, device_name: str, colors: dict) -> go
             )
 
     fig.update_layout(
+        **chart_layout(colors),
         title=f"Relay Schedule — {device_name}",
         xaxis=dict(
             title="Hour of Day",
