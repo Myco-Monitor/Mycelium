@@ -31,9 +31,9 @@ Mycelium runs locally on a desktop, laptop, or Raspberry Pi. It discovers and po
 - Readings are permanent — nothing is auto-pruned; use date ranges in the UI to narrow what you look at
 
 ### Analytics
-- **Dashboard** — pick a room, Spore or Sentinel set and a date range; Environmental Trends draws one figure with a row per metric (CO2, humidity, temperature, plus PM2.5 / VOC / NOx when a Sentinel is selected) and a line per device, with per-device stats. Harvest Analysis charts yields from the harvest table.
-- **Graph Builder** — curated ad-hoc charts over any readings table (Spore, Sentinel, weather, Hyphae relay, pressure): pick a device, metrics and a chart type; up to three y-axes for mixed units. No code execution.
-- **Records** — preview and download raw readings as CSV; administrators can delete rows
+- **Reports** — how did the period go: pick a room, Spore or Sentinel set and a date range; per-device stats, then one figure with a row per metric (CO2, humidity, temperature, plus PM2.5 / VOC / NOx when a Sentinel is selected) and a line per device. Harvest Analysis charts yields from the harvest table.
+- **Explore** — what exactly happened: free-form charts over any readings table (Spore, Sentinel, weather, Hyphae relay, pressure): pick a device, metrics and a chart type; up to three y-axes for mixed units. No code execution.
+- **Data** — take the rows with you: preview and download raw readings as CSV; administrators can delete rows
 - All charts follow the light/dark theme, including hover boxes
 
 ### Alerts
@@ -97,7 +97,8 @@ Mycelium/
 │       ├── devices_sentinel.py # Sentinel panels (used by devices.py)
 │       ├── farm_overview.py    # Farms and rooms
 │       ├── alerts.py           # Alert rules, active alerts, history
-│       ├── analytics.py        # Dashboard, Graph Builder, Records
+│       ├── analytics.py        # Reports, Explore, Data tabs + shared chart helpers
+│       ├── analytics_reports.py # Reports tab panels (used by analytics.py)
 │       ├── fleet_management.py # Firmware inventory, batch OTA, versions, history
 │       ├── health_dashboard.py # Device health metrics
 │       ├── relay_scheduler.py  # Relay schedule timeline
@@ -267,7 +268,7 @@ at rest, host hardening).
 | Devices | `/devices` | Spore / Hyphae / Sentinel discovery, control, credentials, OTA |
 | Farm Overview | `/farms` | Farm and room CRUD with device counts |
 | Alerts | `/alerts` | Active alerts, history, rules |
-| Analytics | `/analytics` | Device comparison charts, Graph Builder, raw records |
+| Analytics | `/analytics` | Reports (period summary), Explore (free-form charts), Data (raw rows + CSV) |
 | Fleet | `/fleet` | Firmware inventory, batch OTA, device versions, OTA history |
 | Health | `/health` | RSSI, heap, uptime, firmware, response time, last error |
 | Schedules | `/relay-scheduler` | 24-hour relay schedule timeline per Hyphae |

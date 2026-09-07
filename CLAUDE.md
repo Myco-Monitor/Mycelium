@@ -52,7 +52,8 @@ Mycelium/
 │   │   ├── devices_sentinel.py # Sentinel tab/detail panels (imported lazily by devices.py)
 │   │   ├── farm_overview.py    # Farm/room CRUD
 │   │   ├── alerts.py           # Alert rules + history
-│   │   ├── analytics.py        # Dashboard (device comparison chart by Room/Spore/Sentinel), Graph Builder, Records
+│   │   ├── analytics.py        # Reports (period summary by Room/Spore/Sentinel), Explore (ad-hoc charts), Data (raw rows)
+│   │   ├── analytics_reports.py # Reports tab: worker fetch + cards (imported lazily by analytics.py)
 │   │   ├── business.py         # Business operations
 │   │   ├── fleet_management.py # Firmware upload + batch OTA
 │   │   ├── health_dashboard.py # Device health overview
