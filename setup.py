@@ -259,7 +259,6 @@ def create_requirements_file():
         # Data Processing (floors set for Python 3.13 wheels)
         "pandas>=2.2.3",
         "numpy>=2.1.0",
-        "openpyxl>=3.1.0",
         # Security
         "cryptography>=43.0.0",
         # Device Communication

@@ -12,6 +12,7 @@ import logging
 from datetime import datetime, timedelta
 
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 from nicegui import ui, app, run
 
 from web_ui.layout import page_layout, back_to_dashboard
@@ -114,6 +115,28 @@ READINGS_QUERY_LIMIT = 100_000
 # count label, CSV download, and delete).
 PREVIEW_ROW_CAP = 500
 
+# Series colours for the Dashboard comparison chart (one per device) and the
+# Graph Builder / relay charts (one per metric or relay). Material 400 hues,
+# readable on the dark template.
+SERIES_PALETTE = ["#ef5350", "#42a5f5", "#66bb6a", "#ffa726", "#ab47bc", "#26c6da"]
+
+# Comparison-chart rows as (readings-row field, axis title). Base rows always
+# appear (the temp title gets the user's unit); Sentinel rows only when a
+# Sentinel is among the selected devices.
+BASE_ROWS = [
+    ("co2", "CO2 (ppm)"),
+    ("humidity", "Humidity (%)"),
+    ("temperature", "Temp"),
+]
+SENTINEL_ROWS = [("pm2_5", "PM2.5 (µg/m³)"), ("voc", "VOC Index"), ("nox", "NOx Index")]
+CHART_ROW_PX = 160  # figure height per metric row
+CHART_BASE_PX = 80  # plus legend and margins
+
+
+def _device_colour(index: int) -> str:
+    """Colour of the device at `index` in selection order; dot and lines agree."""
+    return SERIES_PALETTE[index % len(SERIES_PALETTE)]
+
 
 def _normalize_end_ts(end_date: str) -> str:
     """Widen a YYYY-MM-DD end bound to include the whole day.
@@ -173,63 +196,73 @@ def _chart_ts(value):
     return dt.replace(tzinfo=None) if dt else value
 
 
-def _build_env_trends_chart(readings, colors, temp_pref="C"):
-    """Build a plotly time-series chart for environmental trends."""
-    if not readings:
+def _build_comparison_chart(panels, temp_pref="C"):
+    """One figure, one row per metric, one line per device in its colour.
+
+    Rows share the time axis, so a zoom on any row applies to all. The base
+    rows (CO2, humidity, temp) always appear; the Sentinel rows (PM2.5, VOC,
+    NOx) only when a Sentinel is among the panels, and Spores add no trace
+    there. A device with no readings keeps its legend entry; an empty trace
+    draws nothing.
+    """
+    if not any(p["readings"] for p in panels):
         return _empty_figure("No environmental data for selected period")
 
-    temp_unit = _temp_unit(temp_pref)
-    timestamps = [_chart_ts(r.get("timestamp", "")) for r in readings]
-    co2 = [r.get("co2") for r in readings]
-    temp = [_to_pref_temp(r.get("temperature"), temp_pref) for r in readings]
-    humidity = [r.get("humidity") for r in readings]
+    unit = _temp_unit(temp_pref)
+    rows = [
+        (field, f"{label} ({unit})" if field == "temperature" else label)
+        for field, label in BASE_ROWS
+    ]
+    if any(p["device"]["source"] == "sentinel" for p in panels):
+        rows += SENTINEL_ROWS
+    sentinel_fields = {field for field, _label in SENTINEL_ROWS}
 
-    # Standard metric order (legend): CO2, humidity, temp. The per-metric
-    # y-axis assignments (y/y2/y3) stay with their metrics.
-    fig = go.Figure()
-    fig.add_trace(
-        go.Scatter(
-            x=timestamps, y=co2, name="CO2 (ppm)", yaxis="y", line=dict(color="#ef5350")
-        )
+    fig = make_subplots(
+        rows=len(rows), cols=1, shared_xaxes=True, vertical_spacing=0.04
     )
-    fig.add_trace(
-        go.Scatter(
-            x=timestamps,
-            y=humidity,
-            name="Humidity (%)",
-            yaxis="y3",
-            line=dict(color="#66bb6a"),
-        )
-    )
-    fig.add_trace(
-        go.Scatter(
-            x=timestamps,
-            y=temp,
-            name=f"Temp ({temp_unit})",
-            yaxis="y2",
-            line=dict(color="#42a5f5"),
-        )
-    )
+    for i, panel in enumerate(panels):
+        dev = panel["device"]
+        readings = panel["readings"]
+        x = [_chart_ts(r.get("timestamp", "")) for r in readings]
+        colour = _device_colour(i)
+        # Spore and Sentinel ids come from different tables and can collide,
+        # so the legend group (one click hides the device on every row)
+        # carries the source too
+        group = f"{dev['source']}:{dev['device_id']}"
+        first = True
+        for row, (field, _label) in enumerate(rows, start=1):
+            if field in sentinel_fields and dev["source"] != "sentinel":
+                continue
+            y = [r.get(field) for r in readings]
+            if field == "temperature":
+                y = [_to_pref_temp(v, temp_pref) for v in y]
+            fig.add_trace(
+                go.Scatter(
+                    x=x,
+                    y=y,
+                    name=dev["name"],
+                    mode="lines",
+                    line=dict(color=colour),
+                    legendgroup=group,
+                    showlegend=first,
+                ),
+                row=row,
+                col=1,
+            )
+            first = False
 
+    for row, (_field, label) in enumerate(rows, start=1):
+        fig.update_yaxes(title_text=label, row=row, col=1)
+    fig.update_xaxes(title_text="Time", row=len(rows), col=1)
     fig.update_layout(
         template="plotly_dark",
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
-        margin=dict(l=60, r=60, t=30, b=40),
-        legend=dict(orientation="h", y=1.12),
-        xaxis=dict(title="Time"),
-        yaxis=dict(title="CO2 (ppm)", side="left"),
-        yaxis2=dict(
-            title=f"Temp ({temp_unit})", side="right", overlaying="y", showgrid=False
-        ),
-        yaxis3=dict(
-            title="Humidity (%)",
-            side="right",
-            overlaying="y",
-            anchor="free",
-            position=0.95,
-            showgrid=False,
-        ),
+        margin=dict(l=70, r=20, t=40, b=40),
+        # Height lives in the layout, not CSS, so it follows the row count
+        height=CHART_BASE_PX + CHART_ROW_PX * len(rows),
+        hovermode="x unified",
+        legend=dict(orientation="h", x=0, xanchor="left", y=1.0, yanchor="bottom"),
     )
     return fig
 
@@ -261,44 +294,6 @@ def _build_harvest_chart(harvests, colors):
         margin=dict(l=60, r=20, t=30, b=40),
         xaxis=dict(title="Harvest Date"),
         yaxis=dict(title="Yield (g)"),
-    )
-    return fig
-
-
-def _build_air_quality_chart(readings, colors):
-    """Sentinel air-quality time series: PM2.5 / PM10 (µg/m³) and VOC / NOx (index)."""
-    if not readings:
-        return _empty_figure("No air-quality data for selected period")
-
-    timestamps = [_chart_ts(r.get("timestamp", "")) for r in readings]
-    series = [
-        ("pm2_5", "PM2.5 (µg/m³)", "y", "#ffa726"),
-        ("pm10", "PM10 (µg/m³)", "y", "#ab47bc"),
-        ("voc", "VOC Index", "y2", "#26c6da"),
-        ("nox", "NOx Index", "y2", "#8d6e63"),
-    ]
-
-    fig = go.Figure()
-    for field, label, yaxis, color in series:
-        fig.add_trace(
-            go.Scatter(
-                x=timestamps,
-                y=[r.get(field) for r in readings],
-                name=label,
-                yaxis=yaxis,
-                line=dict(color=color),
-            )
-        )
-
-    fig.update_layout(
-        template="plotly_dark",
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        margin=dict(l=60, r=60, t=30, b=40),
-        legend=dict(orientation="h", y=1.12),
-        xaxis=dict(title="Time"),
-        yaxis=dict(title="Particulates (µg/m³)", side="left"),
-        yaxis2=dict(title="Index", side="right", overlaying="y", showgrid=False),
     )
     return fig
 
@@ -437,7 +432,8 @@ def _build_dashboard_panel(analytics, rooms, state, colors):
     Scope is a room (every Spore and Sentinel assigned to it) and/or specific
     devices: the Spore and Sentinel selects list every device Mycelium knows,
     so a Sentinel in another room can sit alongside the tent's sensors. Each
-    selected device gets its own panel; nothing is blended across devices.
+    selected device is one line per metric row; nothing is blended across
+    devices.
     """
 
     # Containers that get refreshed when filters change
@@ -583,13 +579,13 @@ def _build_dashboard_panel(analytics, rooms, state, colors):
 def _fetch_dashboard_data(analytics, start, end, devices):
     """Run all dashboard queries. No UI calls — safe for run.io_bound.
 
-    One panel per selected device: its readings, stats and source-specific
-    insights. Harvests are period-wide and fetched once.
+    One panel per selected device: its readings and stats. Harvests are
+    period-wide and fetched once.
     """
-    data = {"panels": [], "harvests": [], "harvest_insights": []}
+    data = {"panels": [], "harvests": []}
 
     for dev in devices:
-        panel = {"device": dev, "readings": [], "stats": None, "insights": []}
+        panel = {"device": dev, "readings": [], "stats": None}
         try:
             if dev["source"] == "sentinel":
                 panel["readings"] = analytics.get_sentinel_readings_for_period(
@@ -607,26 +603,10 @@ def _fetch_dashboard_data(analytics, start, end, devices):
         except Exception as e:
             logger.warning(f"Failed to calculate stats for {dev['label']}: {e}")
 
-        try:
-            # Hand over what is already fetched so the readings query is not
-            # run a second time; harvests=[] keeps the yield insight out of
-            # the per-device list (it is added once below)
-            panel["insights"] = analytics.generate_insights(
-                start,
-                end,
-                readings=panel["readings"],
-                stats=panel["stats"],
-                harvests=[],
-                source=dev["source"],
-            )
-        except Exception as e:
-            logger.warning(f"Failed to generate insights for {dev['label']}: {e}")
-
         data["panels"].append(panel)
 
     try:
         data["harvests"] = analytics.get_harvests_for_period(start, end)
-        data["harvest_insights"] = analytics.harvest_insights(data["harvests"])
     except Exception as e:
         logger.warning(f"Failed to load harvests: {e}")
 
@@ -639,58 +619,39 @@ def _render_dashboard(container, data, colors):
 
     panels = data["panels"]
     harvests = data["harvests"]
-    harvest_insights = data["harvest_insights"]
+    # Reads app.storage.user, so it stays on the UI side (never in the worker)
+    pref = _temp_pref()
 
     with container:
         # Sub-tabs
         with ui.tabs().classes("w-full") as sub_tabs:
             env_tab = ui.tab("Environmental Trends", icon="thermostat")
             harvest_tab = ui.tab("Harvest Analysis", icon="grass")
-            insight_tab = ui.tab("Insights", icon="lightbulb")
 
         with ui.tab_panels(sub_tabs, value=env_tab).classes("w-full"):
             # -- Environmental Trends -----------------------------------------
-            # One panel per device, side by side on a wide screen and stacked
-            # on a narrow one
+            # Per-device stats, then every device on one figure: a row per
+            # metric, a colour per device
             with ui.tab_panel(env_tab):
-                with (
-                    ui.element("div")
-                    .classes("w-full gap-4")
-                    .style(
-                        "display: grid; "
-                        "grid-template-columns: repeat(auto-fit, minmax(min(100%, 600px), 1fr));"
-                    )
-                ):
-                    for panel in panels:
-                        _build_device_panel(panel, colors)
+                _build_device_stats(panels, pref)
+                with ui.card().classes("w-full p-3 q-mt-md"):
+                    ui.plotly(_build_comparison_chart(panels, pref)).classes("w-full")
 
             # -- Harvest Analysis ---------------------------------------------
             with ui.tab_panel(harvest_tab):
                 _build_harvest_analysis(harvests, colors)
 
-            # -- Insights -----------------------------------------------------
-            with ui.tab_panel(insight_tab):
-                _build_insights(panels, harvest_insights, colors)
-
 
 # -- Dashboard sub-sections ---------------------------------------------------
 
 
-def _stat_card(label, value, icon, colors, aqi_pm25=None):
-    """Render a small stat card; aqi_pm25 adds the EPA band chip for a PM2.5 value."""
+def _stat_card(label, value, icon, colors):
+    """Render a small stat card (Harvest Analysis)."""
     with ui.card().classes("p-3 flex-1 min-w-40"):
         with ui.row().classes("items-center gap-2"):
             ui.icon(icon, size="sm").style(f"color: {colors['primary']}")
             ui.label(label).classes("text-caption text-muted")
         ui.label(str(value)).classes("text-h5 q-mt-xs")
-        band = pm25_aqi_band(aqi_pm25) if aqi_pm25 is not None else None
-        if band:
-            # Styled label rather than ui.badge: an inline background loses
-            # to Quasar's `bg-primary !important` on a badge
-            text, bg, fg = band
-            ui.label(text).classes("text-caption text-weight-bold q-px-sm").style(
-                f"background-color: {bg}; color: {fg}; border-radius: 12px;"
-            )
 
 
 def _fmt_stat(value, fmt):
@@ -698,69 +659,106 @@ def _fmt_stat(value, fmt):
     return fmt.format(value) if value is not None else "--"
 
 
-def _build_device_panel(panel, colors):
-    """One device's Environmental Trends card: stats, env chart, air quality."""
-    dev = panel["device"]
-    stats = panel["stats"]
-    readings = panel["readings"]
-    is_sentinel = dev["source"] == "sentinel"
-    pref = _temp_pref()
-    unit = _temp_unit(pref)
+def _fmt_range(lo, hi, fmt):
+    """'min – max' caption for a metric, or '--' when it has no data."""
+    if lo is None or hi is None:
+        return "--"
+    return f"{fmt.format(lo)} – {fmt.format(hi)}"
 
+
+def _aqi_chip(pm25):
+    """EPA AQI band chip for a PM2.5 value; renders nothing when unavailable.
+
+    A styled label rather than ui.badge: an inline background-color on a
+    badge loses to Quasar's `bg-primary !important` class.
+    """
+    band = pm25_aqi_band(pm25)
+    if band is None:
+        return
+    text, bg, fg = band
+    ui.label(text).classes("text-caption text-weight-bold q-px-sm").style(
+        f"background-color: {bg}; color: {fg}; border-radius: 12px;"
+    )
+
+
+def _stat_cell(label, value, caption, pm25=None):
+    """One metric cell of the device stats grid: label, bold value, range caption."""
+    with ui.column().classes("gap-0"):
+        ui.label(label).classes("text-caption text-muted")
+        with ui.row().classes("items-center gap-2 no-wrap"):
+            ui.label(value).classes("text-weight-bold")
+            if pm25 is not None:
+                _aqi_chip(pm25)
+        ui.label(caption).classes("text-caption text-muted")
+
+
+def _build_device_stats(panels, temp_pref):
+    """Per-device stats grid above the comparison chart.
+
+    One row per device: colour dot (matches its lines), name, source badge,
+    room, then CO2 / Humidity / Temp (Sentinels also PM2.5 with its EPA
+    band) as the average with a min – max caption, and the data-point
+    count. Cells are direct grid children so columns line up across devices.
+    """
+    unit = _temp_unit(temp_pref)
     with ui.card().classes("w-full p-3"):
-        with ui.row().classes("items-center gap-2 q-mb-sm"):
-            ui.icon("air" if is_sentinel else "sensors", size="sm").style(
-                f"color: {colors['primary']}"
+        with (
+            ui.element("div")
+            .classes("w-full")
+            .style(
+                "display: grid; "
+                "grid-template-columns: 14px minmax(200px, 2fr) repeat(5, minmax(110px, 1fr)); "
+                "gap: 8px 16px; align-items: center; overflow-x: auto;"
             )
-            ui.label(dev["name"]).classes("text-subtitle1 text-weight-bold")
-            ui.badge("Sentinel" if is_sentinel else "Spore").props("outline")
-            ui.label(dev["room"]).classes("text-caption text-muted")
+        ):
+            for i, panel in enumerate(panels):
+                dev = panel["device"]
+                st = panel["stats"]  # None when the device has no readings in range
+                is_sentinel = dev["source"] == "sentinel"
 
-        # Stat cards. Sentinel leads with PM2.5 (its hero metric); then the
-        # standard order CO2, humidity, temp.
-        avg_temp = _to_pref_temp(stats.temp_mean, pref) if stats else None
-        with ui.row().classes("w-full gap-3 flex-wrap q-mb-md"):
-            if is_sentinel:
-                pm25 = stats.pm25_mean if stats else None
-                _stat_card(
-                    "Avg PM2.5",
-                    _fmt_stat(pm25, "{:.1f} µg/m³"),
-                    "air",
-                    colors,
-                    aqi_pm25=pm25,
+                def val(attr):
+                    return getattr(st, attr) if st else None
+
+                ui.element("div").style(
+                    "width: 12px; height: 12px; border-radius: 50%; "
+                    f"background: {_device_colour(i)};"
                 )
-            _stat_card(
-                "Avg CO2",
-                _fmt_stat(stats.co2_mean if stats else None, "{:.0f} ppm"),
-                "co2",
-                colors,
-            )
-            _stat_card(
-                "Avg Humidity",
-                _fmt_stat(stats.humidity_mean if stats else None, "{:.1f}%"),
-                "water_drop",
-                colors,
-            )
-            _stat_card(
-                "Avg Temp", _fmt_stat(avg_temp, "{:.1f} " + unit), "thermostat", colors
-            )
-            _stat_card(
-                "Data Points",
-                f"{stats.data_points:,}" if stats else "0",
-                "data_usage",
-                colors,
-            )
+                with ui.row().classes("items-center gap-2 no-wrap"):
+                    ui.label(dev["name"]).classes("text-subtitle2 text-weight-bold")
+                    ui.badge("Sentinel" if is_sentinel else "Spore").props("outline")
+                    ui.label(dev["room"]).classes("text-caption text-muted")
 
-        ui.label("Environment").classes("text-subtitle2 text-weight-bold q-mb-xs")
-        fig = _build_env_trends_chart(readings, colors, pref)
-        ui.plotly(fig).classes("w-full").style("height: 360px")
-
-        if is_sentinel:
-            ui.label("Air Quality").classes(
-                "text-subtitle2 text-weight-bold q-mt-md q-mb-xs"
-            )
-            fig = _build_air_quality_chart(readings, colors)
-            ui.plotly(fig).classes("w-full").style("height: 360px")
+                _stat_cell(
+                    "CO2",
+                    _fmt_stat(val("co2_mean"), "{:.0f} ppm"),
+                    _fmt_range(val("co2_min"), val("co2_max"), "{:.0f}"),
+                )
+                _stat_cell(
+                    "Humidity",
+                    _fmt_stat(val("humidity_mean"), "{:.1f}%"),
+                    _fmt_range(val("humidity_min"), val("humidity_max"), "{:.0f}"),
+                )
+                _stat_cell(
+                    "Temp",
+                    _fmt_stat(
+                        _to_pref_temp(val("temp_mean"), temp_pref), "{:.1f} " + unit
+                    ),
+                    _fmt_range(
+                        _to_pref_temp(val("temp_min"), temp_pref),
+                        _to_pref_temp(val("temp_max"), temp_pref),
+                        "{:.1f}",
+                    ),
+                )
+                if is_sentinel:
+                    _stat_cell(
+                        "PM2.5",
+                        _fmt_stat(val("pm25_mean"), "{:.1f} µg/m³"),
+                        _fmt_range(val("pm25_min"), val("pm25_max"), "{:.1f}"),
+                        pm25=val("pm25_mean"),
+                    )
+                else:
+                    ui.element("div")  # keeps the grid columns aligned
+                _stat_cell("Points", f"{st.data_points:,}" if st else "0", "")
 
 
 def _build_harvest_analysis(harvests, colors):
@@ -781,58 +779,6 @@ def _build_harvest_analysis(harvests, colors):
         ui.label("Harvest Yields").classes("text-subtitle1 text-weight-bold q-mb-sm")
         fig = _build_harvest_chart(harvests, colors)
         ui.plotly(fig).classes("w-full").style("height: 400px")
-
-
-INSIGHT_ICONS = {
-    "success": ("check_circle", "positive"),
-    "warning": ("warning", "warning"),
-    "info": ("info", "info"),
-    "danger": ("error", "negative"),
-}
-
-
-def _insight_card(insight):
-    """Render one Insight as a card."""
-    icon, badge_type = INSIGHT_ICONS.get(insight.type, ("info", "info"))
-    with ui.card().classes("w-full p-4 q-mb-sm"):
-        with ui.row().classes("items-start gap-3"):
-            ui.icon(icon, size="sm").props(f"color={badge_type}")
-            with ui.column().classes("gap-1 flex-1"):
-                ui.label(insight.title).classes("text-subtitle1 text-weight-bold")
-                ui.label(insight.message).classes("text-body2")
-                with ui.row().classes("items-center gap-2 q-mt-xs"):
-                    ui.badge(insight.metric.upper()).props(
-                        f"color={badge_type} outline"
-                    )
-                    ui.label(insight.action).classes("text-caption text-muted")
-
-
-def _build_insights(panels, harvest_insights, colors):
-    """Insights sub-tab content: a section per device, then harvests."""
-    if not harvest_insights and not any(p["insights"] for p in panels):
-        with ui.card().classes("w-full p-4"):
-            ui.label("No insights available for the selected period.").classes(
-                "text-muted"
-            )
-            ui.label(
-                "Try expanding the date range or checking that devices are reporting data."
-            ).classes("text-caption text-muted q-mt-sm")
-        return
-
-    for panel in panels:
-        if not panel["insights"]:
-            continue
-        dev = panel["device"]
-        with ui.row().classes("items-center gap-2 q-mt-sm q-mb-xs"):
-            ui.label(dev["name"]).classes("text-subtitle1 text-weight-bold")
-            ui.label(dev["room"]).classes("text-caption text-muted")
-        for insight in panel["insights"]:
-            _insight_card(insight)
-
-    if harvest_insights:
-        ui.label("Harvests").classes("text-subtitle1 text-weight-bold q-mt-sm q-mb-xs")
-        for insight in harvest_insights:
-            _insight_card(insight)
 
 
 # -- Shared filter-bar helpers (Graph Builder + Records) ----------------------
@@ -910,7 +856,7 @@ def _build_metric_chart(rows, metric_specs, chart_type, colors):
         return _empty_figure("No data for selected filters")
 
     x = [_chart_ts(r.get("reading_ts", "")) for r in rows]
-    palette = ["#ef5350", "#42a5f5", "#66bb6a", "#ffa726", "#ab47bc", "#26c6da"]
+    palette = SERIES_PALETTE
 
     # Assign each distinct unit label to an axis (y, y2, y3). Group by the
     # label text so like-united metrics share a scale.
@@ -1143,7 +1089,7 @@ def _build_relay_chart(rows, colors):
     """Stepped 0/1 chart with one trace per relay_number."""
     if not rows:
         return _empty_figure("No data for selected filters")
-    palette = ["#ef5350", "#42a5f5", "#66bb6a", "#ffa726", "#ab47bc", "#26c6da"]
+    palette = SERIES_PALETTE
     by_relay = {}
     for r in rows:
         by_relay.setdefault(r.get("relay_number"), []).append(r)
