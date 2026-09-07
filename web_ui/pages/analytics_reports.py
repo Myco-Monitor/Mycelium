@@ -21,9 +21,8 @@ from web_ui.pages.analytics import (
     _date_picker,
     _device_colour,
     _temp_pref,
-    _temp_unit,
-    _to_pref_temp,
 )
+from api.services.report_service import temp_unit, to_pref_temp
 
 from storage.tables import device_spore, device_sentinel
 
@@ -301,7 +300,7 @@ def _build_device_stats(panels, temp_pref):
     band) as the average with a min – max caption, and the data-point
     count. Cells are direct grid children so columns line up across devices.
     """
-    unit = _temp_unit(temp_pref)
+    unit = temp_unit(temp_pref)
     with ui.card().classes("w-full p-3"):
         with (
             ui.element("div")
@@ -342,11 +341,11 @@ def _build_device_stats(panels, temp_pref):
                 _stat_cell(
                     "Temp",
                     _fmt_stat(
-                        _to_pref_temp(val("temp_mean"), temp_pref), "{:.1f} " + unit
+                        to_pref_temp(val("temp_mean"), temp_pref), "{:.1f} " + unit
                     ),
                     _fmt_range(
-                        _to_pref_temp(val("temp_min"), temp_pref),
-                        _to_pref_temp(val("temp_max"), temp_pref),
+                        to_pref_temp(val("temp_min"), temp_pref),
+                        to_pref_temp(val("temp_max"), temp_pref),
                         "{:.1f}",
                     ),
                 )

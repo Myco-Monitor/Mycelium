@@ -24,6 +24,7 @@ from nicegui import ui, app
 from web_ui.layout import page_layout, back_to_dashboard
 from web_ui.theme import get_colors, chart_layout
 from web_ui.format import to_user_dt
+from api.services.report_service import temp_unit, to_pref_temp
 
 from storage.tables import (
     readings_spore,
@@ -174,22 +175,6 @@ def _temp_pref() -> str:
         return "C"
 
 
-def _temp_unit(pref: str) -> str:
-    """Display unit string for a preference."""
-    return "°F" if pref == "F" else "°C"
-
-
-def _to_pref_temp(celsius, pref: str):
-    """Convert a stored Celsius value to the preferred unit (float), or None."""
-    if celsius is None:
-        return None
-    try:
-        c = float(celsius)
-    except (TypeError, ValueError):
-        return None
-    return c * 9 / 5 + 32 if pref == "F" else c
-
-
 # -- Chart builders -----------------------------------------------------------
 
 
@@ -214,7 +199,7 @@ def _build_comparison_chart(panels, temp_pref, colors):
     if not any(p["readings"] for p in panels):
         return _empty_figure("No environmental data for selected period", colors)
 
-    unit = _temp_unit(temp_pref)
+    unit = temp_unit(temp_pref)
     rows = [
         (field, f"{label} ({unit})" if field == "temperature" else label)
         for field, label in BASE_ROWS
@@ -241,7 +226,7 @@ def _build_comparison_chart(panels, temp_pref, colors):
                 continue
             y = [r.get(field) for r in readings]
             if field == "temperature":
-                y = [_to_pref_temp(v, temp_pref) for v in y]
+                y = [to_pref_temp(v, temp_pref) for v in y]
             fig.add_trace(
                 go.Scatter(
                     x=x,
