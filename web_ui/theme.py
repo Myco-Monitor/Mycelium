@@ -89,6 +89,28 @@ def get_colors() -> dict:
     }
 
 
+def chart_layout(colors: dict) -> dict:
+    """Base plotly layout for a theme palette; spread into fig.update_layout().
+
+    Charts draw on a transparent paper so the card behind shows through. The
+    hover box cannot inherit from that: plotly flattens the transparent paper
+    over white for its background while the text keeps the template's
+    near-white font, so a unified hover box came out white-on-white in both
+    modes. The box gets the theme's own control surface, text and accent
+    colours instead, so it follows light/dark mode like the rest of the page.
+    """
+    return {
+        "template": "plotly_dark",
+        "paper_bgcolor": "rgba(0,0,0,0)",
+        "plot_bgcolor": "rgba(0,0,0,0)",
+        "hoverlabel": {
+            "bgcolor": colors["input_bg"],
+            "bordercolor": colors["primary"],
+            "font": {"color": colors["text"]},
+        },
+    }
+
+
 def apply_theme():
     """Apply the current theme to the page. Call this at the top of each page."""
     theme = get_theme()

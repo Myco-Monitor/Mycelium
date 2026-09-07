@@ -16,7 +16,7 @@ from plotly.subplots import make_subplots
 from nicegui import ui, app, run
 
 from web_ui.layout import page_layout, back_to_dashboard
-from web_ui.theme import get_colors
+from web_ui.theme import get_colors, chart_layout
 from web_ui.format import to_user_dt, pm25_aqi_band
 
 from storage.tables import (
@@ -196,7 +196,7 @@ def _chart_ts(value):
     return dt.replace(tzinfo=None) if dt else value
 
 
-def _build_comparison_chart(panels, temp_pref="C"):
+def _build_comparison_chart(panels, temp_pref, colors):
     """One figure, one row per metric, one line per device in its colour.
 
     Rows share the time axis, so a zoom on any row applies to all. The base
@@ -206,7 +206,7 @@ def _build_comparison_chart(panels, temp_pref="C"):
     draws nothing.
     """
     if not any(p["readings"] for p in panels):
-        return _empty_figure("No environmental data for selected period")
+        return _empty_figure("No environmental data for selected period", colors)
 
     unit = _temp_unit(temp_pref)
     rows = [
@@ -255,9 +255,7 @@ def _build_comparison_chart(panels, temp_pref="C"):
         fig.update_yaxes(title_text=label, row=row, col=1)
     fig.update_xaxes(title_text="Time", row=len(rows), col=1)
     fig.update_layout(
-        template="plotly_dark",
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
+        **chart_layout(colors),
         margin=dict(l=70, r=20, t=40, b=40),
         # Height lives in the layout, not CSS, so it follows the row count
         height=CHART_BASE_PX + CHART_ROW_PX * len(rows),
@@ -270,7 +268,7 @@ def _build_comparison_chart(panels, temp_pref="C"):
 def _build_harvest_chart(harvests, colors):
     """Build a plotly bar chart for harvest data."""
     if not harvests:
-        return _empty_figure("No harvest data for selected period")
+        return _empty_figure("No harvest data for selected period", colors)
 
     dates = [h.get("harvest_date", "")[:10] for h in harvests]
     yields = [h.get("yield_weight", 0) or 0 for h in harvests]
@@ -288,9 +286,7 @@ def _build_harvest_chart(harvests, colors):
         )
     )
     fig.update_layout(
-        template="plotly_dark",
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
+        **chart_layout(colors),
         margin=dict(l=60, r=20, t=30, b=40),
         xaxis=dict(title="Harvest Date"),
         yaxis=dict(title="Yield (g)"),
@@ -298,7 +294,7 @@ def _build_harvest_chart(harvests, colors):
     return fig
 
 
-def _empty_figure(message: str):
+def _empty_figure(message: str, colors):
     """Create an empty plotly figure with a centered message."""
     fig = go.Figure()
     fig.add_annotation(
@@ -311,9 +307,7 @@ def _empty_figure(message: str):
         font=dict(size=16, color="grey"),
     )
     fig.update_layout(
-        template="plotly_dark",
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
+        **chart_layout(colors),
         xaxis=dict(visible=False),
         yaxis=dict(visible=False),
         margin=dict(l=20, r=20, t=20, b=20),
@@ -635,7 +629,9 @@ def _render_dashboard(container, data, colors):
             with ui.tab_panel(env_tab):
                 _build_device_stats(panels, pref)
                 with ui.card().classes("w-full p-3 q-mt-md"):
-                    ui.plotly(_build_comparison_chart(panels, pref)).classes("w-full")
+                    ui.plotly(_build_comparison_chart(panels, pref, colors)).classes(
+                        "w-full"
+                    )
 
             # -- Harvest Analysis ---------------------------------------------
             with ui.tab_panel(harvest_tab):
@@ -853,7 +849,7 @@ def _build_metric_chart(rows, metric_specs, chart_type, colors):
     the Dashboard env-trends chart. `rows` must already be chronological.
     """
     if not rows or not metric_specs:
-        return _empty_figure("No data for selected filters")
+        return _empty_figure("No data for selected filters", colors)
 
     x = [_chart_ts(r.get("reading_ts", "")) for r in rows]
     palette = SERIES_PALETTE
@@ -916,9 +912,7 @@ def _build_metric_chart(rows, metric_specs, chart_type, colors):
     # Build axis layout from the labels we actually assigned.
     label_by_axis = {v: k for k, v in axis_for_label.items()}
     layout = dict(
-        template="plotly_dark",
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
+        **chart_layout(colors),
         margin=dict(l=60, r=60, t=30, b=40),
         legend=dict(orientation="h", y=1.12),
         xaxis=dict(title="Time"),
@@ -1088,7 +1082,7 @@ def _build_graph_builder_panel(colors):
 def _build_relay_chart(rows, colors):
     """Stepped 0/1 chart with one trace per relay_number."""
     if not rows:
-        return _empty_figure("No data for selected filters")
+        return _empty_figure("No data for selected filters", colors)
     palette = SERIES_PALETTE
     by_relay = {}
     for r in rows:
@@ -1107,9 +1101,7 @@ def _build_relay_chart(rows, colors):
             )
         )
     fig.update_layout(
-        template="plotly_dark",
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
+        **chart_layout(colors),
         margin=dict(l=60, r=20, t=30, b=40),
         legend=dict(orientation="h", y=1.12),
         xaxis=dict(title="Time"),
