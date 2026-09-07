@@ -20,6 +20,7 @@ from storage.tables.device_hyphae import (
     update_device_diagnostics,
     get_device_hyphae,
 )
+from storage.tables.device_spore import resolve_device_name
 from storage.tables.readings_hyphae import create_reading, get_latest_reading
 from storage.tables.relay_settings import (
     create_relay_setting,
@@ -69,6 +70,9 @@ class HyphaeDataService:
         """Initialize the Hyphae data service."""
         self.logger = logging.getLogger("api.HyphaeDataService")
         self.clients: Dict[int, HyphaeClient] = {}
+        # Last device name reported per device (firmware 3.6.0+ puts it in
+        # /api/system/info), so the DB is read only when it changes.
+        self._names: Dict[int, str] = {}
 
         # Cache for device configurations
         self._config_cache: Dict[int, Dict[str, Any]] = {}
@@ -264,6 +268,7 @@ class HyphaeDataService:
         """
         client = await self.get_client(device_id)
         info = await client.get_system_info()
+        self._record_device_name(device_id, (info or {}).get("device_name"))
         version = (info or {}).get("firmware_version") or ""
         if not version:
             return None
@@ -275,6 +280,33 @@ class HyphaeDataService:
                 f"Recorded firmware version {version} for Hyphae device {device_id}"
             )
         return version
+
+    def _record_device_name(self, device_id: int, reported: Optional[str]):
+        """Mirror the name set on the device's own configuration page into the DB.
+
+        Hyphae firmware 3.6.0+ reports it in /api/system/info; older firmware
+        sends nothing and the stored name stays. The DB is read only when the
+        reported name changes (see resolve_device_name for what gets stored).
+        """
+        reported = (reported or "").strip()
+        if not reported or self._names.get(device_id) == reported:
+            return
+        try:
+            device = get_device_hyphae(device_id)
+            if device:
+                name = resolve_device_name(
+                    device.get("hostname", ""), reported, device.get("device_name")
+                )
+                if name != device.get("device_name"):
+                    update_device_hyphae(device_id, device_name=name)
+                    self.logger.info(
+                        f"Hyphae device {device_id} is now listed as {name!r} (from device)"
+                    )
+            self._names[device_id] = reported
+        except Exception as e:
+            self.logger.warning(
+                f"Could not record device name for Hyphae device {device_id}: {e}"
+            )
 
     async def refresh_diagnostics(self, device_id: int) -> None:
         """
@@ -296,6 +328,7 @@ class HyphaeDataService:
                     f"Hyphae device {device_id} returned no system info object"
                 )
                 return
+            self._record_device_name(device_id, info.get("device_name"))
             update_device_diagnostics(
                 device_id,
                 wifi_rssi=info.get("rssi"),

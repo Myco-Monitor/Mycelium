@@ -26,6 +26,7 @@ from storage.tables.device_sentinel import (
     update_device_diagnostics,
     get_device_sentinel,
 )
+from storage.tables.device_spore import resolve_device_name
 from storage.tables.readings_sentinel import create_reading, get_latest_reading
 
 # Sanity ranges per channel; a non-None value outside its range rejects the
@@ -66,6 +67,8 @@ class SentinelDataService:
         # Last firmware version written per device, so a version that rides
         # along with every reading costs a DB write only when it changes.
         self._fw_versions: Dict[int, Optional[str]] = {}
+        # Same idea for the device name, which also rides along with readings.
+        self._names: Dict[int, str] = {}
 
     async def initialize_client(self, device_id: int) -> SentinelClient:
         """
@@ -153,6 +156,7 @@ class SentinelDataService:
         reading = await client.get_latest_reading()
 
         self._record_firmware_version(device_id, reading.get("firmware_version"))
+        self._record_device_name(device_id, reading.get("device_name"))
 
         if reading.get("error"):
             self.logger.debug(
@@ -161,6 +165,33 @@ class SentinelDataService:
             return None
 
         return await self.store_reading(device_id, reading)
+
+    def _record_device_name(self, device_id: int, reported: Optional[str]):
+        """Mirror the name set on the device's own configuration page into the DB.
+
+        Sentinels report it in every reading; the DB is read only when the
+        reported name changes (see resolve_device_name for what gets stored).
+        """
+        reported = (reported or "").strip()
+        if not reported or self._names.get(device_id) == reported:
+            return
+        try:
+            device = get_device_sentinel(device_id)
+            if device:
+                name = resolve_device_name(
+                    device.get("hostname", ""), reported, device.get("device_name")
+                )
+                if name != device.get("device_name"):
+                    update_device_sentinel(device_id, device_name=name)
+                    self.logger.info(
+                        f"Sentinel device {device_id} is now listed as {name!r} "
+                        "(from device)"
+                    )
+            self._names[device_id] = reported
+        except Exception as e:
+            self.logger.warning(
+                f"Could not record device name for Sentinel device {device_id}: {e}"
+            )
 
     def _record_firmware_version(self, device_id: int, version: Optional[str]):
         """Persist the running firmware version when it differs from the stored one."""

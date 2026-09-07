@@ -32,6 +32,39 @@ def normalize_device_host(host: str) -> str:
     return host
 
 
+def mdns_label(host: str) -> str:
+    """'spore-1234' from 'spore-1234.local[:port]' (the bare host for IPs)."""
+    return (host or "").strip().split(":")[0].removesuffix(".local")
+
+
+def resolve_device_name(
+    host: str, reported: Optional[str], current: Optional[str] = None
+) -> str:
+    """The name Mycelium lists a device under. Shared by all three device types.
+
+    A device carries the name its owner typed on its own configuration page
+    and reports it in JSON (Spore: /api/status and readings; Sentinel:
+    readings; Hyphae: /api/system/info from firmware 3.6.0). That name wins
+    whenever it is more than the device's hostname. Otherwise the stored
+    name stays, unless it is just the hostname, in which case the shorter
+    mDNS label is used — so Name and Hostname never read as the same text
+    twice. The hostname remains the device's identity either way.
+    """
+    label = mdns_label(host)
+    hostish = {
+        label.lower(),
+        f"{label}.local".lower(),
+        (host or "").strip().split(":")[0].lower(),
+    }
+    reported = (reported or "").strip()
+    if reported and reported.lower() not in hostish:
+        return reported
+    current = (current or "").strip()
+    if current and current.lower() not in hostish:
+        return current
+    return label
+
+
 def create_device_spore(
     room_id: int,
     device_name: str,

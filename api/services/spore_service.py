@@ -18,6 +18,7 @@ from storage.tables.device_spore import (
     update_device_spore,
     update_device_diagnostics,
     get_device_spore,
+    resolve_device_name,
 )
 from storage.tables.readings_spore import create_reading, get_latest_reading
 
@@ -37,6 +38,9 @@ class SporeDataService:
         """Initialize the Spore data service."""
         self.logger = logging.getLogger("api.SporeDataService")
         self.clients: Dict[int, SporeClient] = {}
+        # Last device name reported per device, so the name that rides along
+        # with every reading costs a DB read only when it changes.
+        self._names: Dict[int, str] = {}
 
     async def initialize_client(self, device_id: int) -> SporeClient:
         """
@@ -131,6 +135,8 @@ class SporeDataService:
         client = await self.get_client(device_id)
         reading = await client.get_latest_reading()
 
+        self._record_device_name(device_id, (reading or {}).get("device_name"))
+
         # Transform and store the reading
         stored_reading = await self.store_reading(device_id, reading)
         return stored_reading
@@ -154,6 +160,7 @@ class SporeDataService:
         """
         client = await self.get_client(device_id)
         status = await client.get_status()
+        self._record_device_name(device_id, (status or {}).get("device_name"))
         version = (status or {}).get("firmware_version") or ""
         if not version:
             return None
@@ -165,6 +172,33 @@ class SporeDataService:
                 f"Recorded firmware version {version} for Spore device {device_id}"
             )
         return version
+
+    def _record_device_name(self, device_id: int, reported: Optional[str]):
+        """Mirror the name set on the device's own configuration page into the DB.
+
+        Spores report it in /api/status and in every reading; the DB is read
+        only when the reported name changes (see resolve_device_name for what
+        gets stored).
+        """
+        reported = (reported or "").strip()
+        if not reported or self._names.get(device_id) == reported:
+            return
+        try:
+            device = get_device_spore(device_id)
+            if device:
+                name = resolve_device_name(
+                    device.get("hostname", ""), reported, device.get("device_name")
+                )
+                if name != device.get("device_name"):
+                    update_device_spore(device_id, device_name=name)
+                    self.logger.info(
+                        f"Spore device {device_id} is now listed as {name!r} (from device)"
+                    )
+            self._names[device_id] = reported
+        except Exception as e:
+            self.logger.warning(
+                f"Could not record device name for Spore device {device_id}: {e}"
+            )
 
     async def refresh_diagnostics(self, device_id: int) -> None:
         """

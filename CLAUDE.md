@@ -148,8 +148,9 @@ def my_page():
 - Password-manager friendliness: auth inputs sit inside `ui.element('form')` wrappers with `name=`/`autocomplete=` set via `.props()` — never via the `ui.input(autocomplete=...)` kwarg, which is a word-suggestion datalist
 
 **Device naming:**
-- `device_name` is Mycelium's own label for a device, never the device's identity (that is `hostname`). It is set once on Add (`devices._default_device_name`: the user's typed name, else the label the device reports when it is more than its hostname, else the mDNS name `spore-1234`) and renamed from the Device Name card in the Management tab (`_device_name_card`, shared by Spore/Hyphae/Sentinel)
-- Refresh paths (`refresh_*_device_data`, polling services) update firmware/modes/status only — never `device_name` — so a rename sticks. Dashboard, reports and alerts all read `device_name`
+- `device_name` mirrors the name the owner set on the device's own configuration page; `hostname` is the identity. Devices report it in JSON — Spore `/api/status` and every reading, Sentinel `/api/readings/latest`, Hyphae `/api/system/info` from firmware 3.6.0 (older Hyphae report none)
+- `storage.tables.device_spore.resolve_device_name(host, reported, current)` decides what is stored, for all three types: the reported name when it is more than the hostname, else the stored name, else the mDNS label (`spore-1234`) — so Name and Hostname never show the same text twice
+- Synced on Add, on Refresh All (`refresh_*_device_data`), and by the pollers (`*_service._record_device_name`, DB write only when the reported name changes). There is no Mycelium-side rename: change the name on the device and it follows within a poll
 
 **Device credential management:**
 - Device operations use per-device credentials only (`device_pins` table): a legacy 4-8 digit PIN or an 8-64 char device password (firmware 3.6.0+), always sent to the device as the `"pin"` field; the Mycelium account password is never sent to devices
@@ -189,7 +190,7 @@ App version is not in config — it lives in `version.py` (`__version__`). TLS (
 - `POST /api/ota/start-upload` + `/api/ota/upload-stream` — Two-phase OTA (PIN required)
 
 ### Hyphae API (HTTPS, port 443)
-- `GET /api/system/info` — System info + relay states
+- `GET /api/system/info` — System info (uptime, firmware_version, rssi; `device_name` from firmware 3.6.0)
 - `GET /api/relay/config|groups|state|thresholds|schedule` — Relay data
 - `POST /api/relay/test|config|groups/set|thresholds|schedule|mode` — Relay control (PIN required)
 - `POST /api/ota/start-upload` + `/api/ota/upload-stream` — Two-phase OTA (PIN required)

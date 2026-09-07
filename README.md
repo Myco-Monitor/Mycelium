@@ -17,7 +17,7 @@ Mycelium runs locally on a desktop, laptop, or Raspberry Pi. It discovers and po
 
 ### Device Management
 - mDNS discovery of `spore-NNNN.local`, `hyphae-NNNN.local` and `sentinel-NNNN.local`, or add a device by typing its hostname
-- Every device carries a name of your choosing (it defaults to the mDNS name); rename it any time from its Management tab and the dashboard, reports and alerts follow. A refresh never overwrites it.
+- Devices are listed under the name set on their own configuration page (Spore and Sentinel today; Hyphae from firmware 3.6.0), defaulting to the mDNS name. Mycelium picks up a change on the next poll, and the dashboard, reports and alerts follow.
 - Devices are addressed by mDNS hostname, never raw IP — the device TLS certificates are issued for the hostname
 - **Spore**: live readings, diagnostics (uptime, heap, RSSI, error log), remote CO2 calibration, and a per-Spore pressure source — the linked Hyphae's BMP581, or weather-derived station pressure (altitude-corrected) for Spores with no Hyphae
 - **Hyphae**: system info, relay configuration, live relay state, on/off schedules, dynamic threshold control
