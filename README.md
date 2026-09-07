@@ -31,7 +31,7 @@ Mycelium runs locally on a desktop, laptop, or Raspberry Pi. It discovers and po
 - Readings are permanent — nothing is auto-pruned; use date ranges in the UI to narrow what you look at
 
 ### Analytics
-- **Reports** — how did the period go: pick a room, Spore or Sentinel set and a date range; per-device stats, then one figure with a row per metric (CO2, humidity, temperature, plus PM2.5 / VOC / NOx when a Sentinel is selected) and a line per device. Harvest Analysis charts yields from the harvest table.
+- **Reports** — how did the period go: pick a room, Spore or Sentinel set and a date range (whole days in your time zone) and get a fixed summary: per-device averages and extremes; **Compliance**, the share of samples inside *your own* alert thresholds with excursion counts and the longest excursion (a metric with no rule says so, there are no built-in targets); **Equipment**, hours and percent on for each relay of the room's Hyphae, excluding test pulses and offline gaps; **Alerts** triggered in the period; a **Daily summary** table of min / average / max per device per day with relay hours and a CSV download; then the trend chart, one row per metric (CO2, humidity, temperature, plus PM2.5 / VOC / NOx when a Sentinel is selected) and a line per device. Harvest Analysis charts yields from the harvest table.
 - **Explore** — what exactly happened: free-form charts over any readings table (Spore, Sentinel, weather, Hyphae relay, pressure): pick a device, metrics and a chart type; up to three y-axes for mixed units. No code execution.
 - **Data** — take the rows with you: preview and download raw readings as CSV; administrators can delete rows
 - All charts follow the light/dark theme, including hover boxes

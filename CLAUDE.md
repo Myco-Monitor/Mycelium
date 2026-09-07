@@ -37,6 +37,7 @@ Mycelium/
 │   │   ├── calibration_orchestration_service.py
 │   │   ├── reconnection_service.py      # Pull cached data after offline
 │   │   ├── alert_service.py             # Threshold evaluation
+│   │   ├── report_service.py            # Reports maths: compliance vs alert rules, relay duty, daily buckets
 │   │   ├── weather_service.py           # OWM weather integration
 │   │   ├── health_service.py            # Device health monitoring
 │   │   └── ...
