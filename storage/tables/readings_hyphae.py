@@ -172,6 +172,55 @@ def get_latest_relay_states(device_id: int) -> List[Dict[str, Any]]:
     return execute_query(query, (device_id, device_id))
 
 
+def get_relay_hourly_duty(
+    device_id: int, start_ts: str, end_ts: str, max_gap_s: float = 300
+) -> List[Dict[str, Any]]:
+    """
+    Relay ON time per relay per UTC hour, integrated in SQL.
+
+    The poller stores a periodic state sample (one row per relay per cycle),
+    not an edge log, so ON time is the sum of the intervals between
+    consecutive samples whose first sample was ON. An interval longer than
+    max_gap_s means the device was away: it is left out of both on_s and
+    covered_s, so an offline stretch counts as neither ON nor OFF. Each
+    interval is attributed to the hour its first sample falls in. Rows
+    flagged testing=1 (relay test pulses) are excluded. Needs SQLite 3.25+
+    (window functions).
+
+    Args:
+        device_id (int): ID of the hyphae device
+        start_ts (str): Inclusive lower bound on reading_ts ('T'-separated ISO)
+        end_ts (str): Inclusive upper bound on reading_ts ('T'-separated ISO)
+        max_gap_s (float): Longest sample spacing still counted as covered
+
+    Returns:
+        List[Dict[str, Any]]: {relay_number, hour_utc ('YYYY-MM-DDTHH'),
+            samples, covered_s, on_s}, ordered by relay then hour. At most
+            one row per relay per hour, whatever the sample rate.
+    """
+    query = """
+    WITH s AS (
+        SELECT relay_number, reading_ts, relay_state,
+               (julianday(LEAD(reading_ts) OVER (
+                    PARTITION BY relay_number ORDER BY reading_ts))
+                - julianday(reading_ts)) * 86400.0 AS gap_s
+        FROM readings_hyphae
+        WHERE device_id = ? AND testing = 0
+          AND reading_ts >= ? AND reading_ts <= ?
+    )
+    SELECT relay_number,
+           substr(reading_ts, 1, 13) AS hour_utc,
+           COUNT(*) AS samples,
+           SUM(CASE WHEN gap_s <= ? THEN gap_s ELSE 0 END) AS covered_s,
+           SUM(CASE WHEN gap_s <= ? AND relay_state = 1 THEN gap_s ELSE 0 END)
+               AS on_s
+    FROM s
+    GROUP BY relay_number, hour_utc
+    ORDER BY relay_number, hour_utc
+    """
+    return execute_query(query, (device_id, start_ts, end_ts, max_gap_s, max_gap_s))
+
+
 def update_reading(
     device_id: int,
     reading_ts: str,

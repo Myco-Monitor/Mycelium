@@ -210,6 +210,51 @@ def get_alerts_for_device(
     return results
 
 
+def get_alerts_between(start_ts: str, end_ts: str) -> List[Dict[str, Any]]:
+    """
+    Get every alert triggered inside a time window, oldest first.
+
+    triggered_at is written by SQLite CURRENT_TIMESTAMP as
+    'YYYY-MM-DD HH:MM:SS' and compared here as a string, so both bounds MUST
+    use that shape (space separator, seconds precision) — e.g.
+    '2026-06-24 04:00:00'. A bare date sorts before every timestamp on that
+    day and drops the end day; a 'T'-separated string sorts after every
+    space-separated one and is wrong as a start bound. Callers should build
+    the bounds with api.services.report_service.alert_bounds().
+
+    No device filter: alert volume is small, so callers narrow the result in
+    Python against whichever devices they are reporting on.
+
+    Args:
+        start_ts: Inclusive lower bound, 'YYYY-MM-DD HH:MM:SS'
+        end_ts: Inclusive upper bound, 'YYYY-MM-DD HH:MM:SS'
+
+    Returns:
+        List of alert records with the rule's rule_name, rule_type, metric,
+        rule_room_id and rule_device_type joined in
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute(
+        """
+        SELECT ah.*, ar.rule_name, ar.rule_type, ar.metric,
+               ar.room_id AS rule_room_id, ar.device_type AS rule_device_type
+        FROM alert_history ah
+        JOIN alert_rules ar ON ah.rule_id = ar.rule_id
+        WHERE ah.triggered_at >= ? AND ah.triggered_at <= ?
+        ORDER BY ah.triggered_at ASC
+    """,
+        (start_ts, end_ts),
+    )
+
+    columns = [description[0] for description in cursor.description]
+    results = [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+    conn.close()
+    return results
+
+
 def resolve_alert(alert_id: int) -> bool:
     """
     Mark an alert as resolved.
