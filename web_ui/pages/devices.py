@@ -27,6 +27,7 @@ from storage.tables.device_spore import (
     get_all_device_spore,
     link_spore_to_hyphae,
     unlink_spore_from_hyphae,
+    update_device_spore,
     update_spore_weather_pressure,
     delete_device_spore,
 )
@@ -35,7 +36,10 @@ from storage.tables.device_hyphae import (
     update_device_hyphae,
     delete_device_hyphae,
 )
-from storage.tables.device_sentinel import delete_device_sentinel
+from storage.tables.device_sentinel import (
+    delete_device_sentinel,
+    update_device_sentinel,
+)
 from storage.tables.grow_rooms import get_all_grow_rooms
 from storage.tables.relay_settings import get_device_relay_settings
 from storage.tables.device_pins import (
@@ -258,6 +262,27 @@ def _placeholder_mac(ip: str) -> str:
     return f"unknown-{label}"
 
 
+def _mdns_label(ip: str) -> str:
+    """'spore-1234' from 'spore-1234.local[:port]' (the bare host for IPs)."""
+    return ip.split(":")[0].removesuffix(".local")
+
+
+def _default_device_name(ip: str, reported: Optional[str]) -> str:
+    """Name a device gets when the user leaves the name blank on Add.
+
+    The device name is Mycelium's own label for a device: it is set here or
+    typed by the user, and never overwritten by a refresh, so a rename
+    sticks. The default is the label the device reports from its own
+    provisioning page when that is more than its hostname, else the mDNS
+    name — so Name and Hostname don't read as the same text twice.
+    """
+    label = _mdns_label(ip)
+    reported = (reported or "").strip()
+    if reported and reported.lower() not in (label.lower(), f"{label}.local".lower()):
+        return reported
+    return label
+
+
 def fetch_spore_readings_latest(ip: str) -> Optional[Dict]:
     """Fetch latest readings from Spore /api/readings/latest."""
     return _get_json(ip, "/api/readings/latest")
@@ -319,8 +344,14 @@ def fetch_hyphae_relay_dynamic(ip: str) -> Optional[Dict]:
     return _parse_hyphae_dynamic_html(_get_text(ip, "/hyphae-relay-dynam"))
 
 
-def store_complete_spore_device_data(ip: str, room_id) -> Dict:
-    """Fetch data from a Spore device, register it in the DB, and return result."""
+def store_complete_spore_device_data(
+    ip: str, room_id, device_name: Optional[str] = None
+) -> Dict:
+    """Fetch data from a Spore device, register it in the DB, and return result.
+
+    `device_name` is the user's choice from the Add dialog; blank means
+    _default_device_name(). The stored name is returned as "device_name".
+    """
     from storage.tables.device_spore import (
         create_device_spore,
         get_device_spore_by_hostname,
@@ -341,11 +372,8 @@ def store_complete_spore_device_data(ip: str, room_id) -> Dict:
     config = fetch_spore_config(ip) or {}
     readings = fetch_spore_readings_latest(ip)
 
-    device_name = (
-        config.get("device_name")
-        or info.get("device_name")
-        or ip.split(":")[0]  # fall back to the hostname (e.g. spore-1234.local)
-    )
+    reported = config.get("device_name") or info.get("device_name")
+    device_name = (device_name or "").strip() or _default_device_name(ip, reported)
     mac = info.get("mac_address") or discover_mac_address(ip) or _placeholder_mac(ip)
     firmware = info.get("firmware_version") or config.get("firmware_version", "")
 
@@ -362,14 +390,21 @@ def store_complete_spore_device_data(ip: str, room_id) -> Dict:
             "success": True,
             "data": {"config": config, "info": info, "readings": readings},
             "device_id": device_id,
+            "device_name": device_name,
         }
     except Exception as e:
         errors.append(str(e))
         return {"success": False, "errors": errors}
 
 
-def store_complete_hyphae_device_data(ip: str, room_id, pin=None) -> Dict:
-    """Fetch data from a Hyphae device, register it in the DB, and return result."""
+def store_complete_hyphae_device_data(
+    ip: str, room_id, pin=None, device_name: Optional[str] = None
+) -> Dict:
+    """Fetch data from a Hyphae device, register it in the DB, and return result.
+
+    `device_name` is the user's choice from the Add dialog; blank means
+    _default_device_name(). The stored name is returned as "device_name".
+    """
     from storage.tables.device_hyphae import (
         create_device_hyphae,
         get_device_hyphae_by_hostname,
@@ -389,7 +424,9 @@ def store_complete_hyphae_device_data(ip: str, room_id, pin=None) -> Dict:
     info = fetch_hyphae_config(ip) or {}
     relay = fetch_hyphae_relay_config(ip)
 
-    device_name = info.get("device_name") or ip.split(":")[0]  # fall back to hostname
+    device_name = (device_name or "").strip() or _default_device_name(
+        ip, info.get("device_name")
+    )
     mac = info.get("mac_address") or discover_mac_address(ip) or _placeholder_mac(ip)
     firmware = info.get("firmware_version", "")
 
@@ -408,6 +445,7 @@ def store_complete_hyphae_device_data(ip: str, room_id, pin=None) -> Dict:
             "success": True,
             "data": {"config": info, "relay_config": relay or {}},
             "device_id": device_id,
+            "device_name": device_name,
         }
     except Exception as e:
         errors.append(str(e))
@@ -419,13 +457,11 @@ def refresh_spore_device_data(device_id, ip: str) -> Dict:
 
     Unlike store_complete_spore_device_data() (the *add* path), this updates a
     device that already exists: it contacts the device, refreshes online status,
-    last-seen time, and any changed name/firmware. Marks offline if unreachable.
+    last-seen time, and the firmware version. Marks offline if unreachable. The
+    device name is Mycelium's own label (see _default_device_name) and is left
+    alone, so a rename on the Devices page sticks.
     """
-    from storage.tables.device_spore import (
-        set_device_online,
-        update_device_spore,
-        update_device_status,
-    )
+    from storage.tables.device_spore import set_device_online, update_device_status
 
     info = fetch_spore_info(ip)
     config = fetch_spore_config(ip) or {}
@@ -436,16 +472,11 @@ def refresh_spore_device_data(device_id, ip: str) -> Dict:
         set_device_online(device_id, 0)
         return {"success": False, "errors": [f"{ip} unreachable."]}
 
-    # Online: bump is_online + last_update, then sync any changed metadata.
+    # Online: bump is_online + last_update, then sync the firmware version.
     update_device_status(device_id, 1)
-    device_name = config.get("device_name") or info.get("device_name")
     firmware = info.get("firmware_version") or config.get("firmware_version")
-    if device_name or firmware:
-        update_device_spore(
-            device_id,
-            device_name=device_name or None,
-            firmware_version=firmware or None,
-        )
+    if firmware:
+        update_device_spore(device_id, firmware_version=firmware)
     return {"success": True, "errors": []}
 
 
@@ -468,16 +499,15 @@ def refresh_hyphae_device_data(device_id, ip: str) -> Dict:
         return {"success": False, "errors": [f"{ip} unreachable."]}
 
     update_device_status(device_id, 1)
-    device_name = info.get("device_name")
     firmware = info.get("firmware_version")
     # The table's Mode column reads mode_enabled from the DB row, so a refresh
     # must sync the device's real modes too — otherwise it shows the DB default
-    # ("Off") until the detail panel happens to fetch them.
+    # ("Off") until the detail panel happens to fetch them. The device name is
+    # Mycelium's own label and is left alone (see _default_device_name).
     modes = fetch_hyphae_config_modes(ip) or {}
-    if device_name or firmware or modes:
+    if firmware or modes:
         update_device_hyphae(
             device_id,
-            device_name=device_name or None,
             firmware_version=firmware or None,
             mode_enabled=modes.get("enabled_mode"),
             mode_operation=modes.get("operation_mode"),
@@ -1062,6 +1092,15 @@ def _open_add_spore_dialog(spore_table_refresh, stat_cards_refresh):
             },
         ).classes("w-full")
 
+        name_input = (
+            ui.input(
+                label="Device Name (optional)",
+                placeholder="Defaults to the mDNS name, e.g. spore-1234",
+            )
+            .props("maxlength=64")
+            .classes("w-full")
+        )
+
         rooms = _room_options()
         room_select = ui.select(
             options=rooms,
@@ -1070,7 +1109,8 @@ def _open_add_spore_dialog(spore_table_refresh, stat_cards_refresh):
         ).classes("w-full")
 
         ui.label(
-            "Enter the device hostname (e.g. spore-1234.local) and assign it to a room."
+            "Enter the device hostname (e.g. spore-1234.local), name it, and "
+            "assign it to a room. You can rename it later from its Management tab."
         ).classes("text-muted text-caption q-mt-sm")
 
         with ui.row().classes("w-full justify-end gap-2 q-mt-md"):
@@ -1087,13 +1127,11 @@ def _open_add_spore_dialog(spore_table_refresh, stat_cards_refresh):
                     return
 
                 try:
-                    result = store_complete_spore_device_data(ip, room_id)
+                    result = store_complete_spore_device_data(
+                        ip, room_id, device_name=name_input.value
+                    )
                     if result.get("success"):
-                        name = (
-                            result.get("data", {})
-                            .get("config", {})
-                            .get("device_name", f"Spore-{ip.split('.')[-1]}")
-                        )
+                        name = result.get("device_name") or ip
                         ui.notify(
                             f'Spore device "{name}" added successfully.',
                             type="positive",
@@ -1121,13 +1159,22 @@ def _open_add_hyphae_dialog(hyphae_table_refresh, stat_cards_refresh):
 
         ip_input = ui.input(
             label="Hostname",
-            placeholder="spore-1234.local or 192.168.1.100:8080",
+            placeholder="hyphae-1234.local or 192.168.1.100:8080",
             validation={
                 "Invalid hostname": lambda v: (
                     bool(_HOST_PATTERN.match(v)) if v else False
                 )
             },
         ).classes("w-full")
+
+        name_input = (
+            ui.input(
+                label="Device Name (optional)",
+                placeholder="Defaults to the mDNS name, e.g. hyphae-1234",
+            )
+            .props("maxlength=64")
+            .classes("w-full")
+        )
 
         pin_input = (
             ui.input(
@@ -1148,8 +1195,9 @@ def _open_add_hyphae_dialog(hyphae_table_refresh, stat_cards_refresh):
         ).classes("w-full")
 
         ui.label(
-            "Enter the device hostname, its password (or legacy PIN), and "
-            "assign it to a room."
+            "Enter the device hostname, name it, give its password (or legacy "
+            "PIN), and assign it to a room. You can rename it later from its "
+            "Management tab."
         ).classes("text-muted text-caption q-mt-sm")
 
         with ui.row().classes("w-full justify-end gap-2 q-mt-md"):
@@ -1167,13 +1215,11 @@ def _open_add_hyphae_dialog(hyphae_table_refresh, stat_cards_refresh):
                     return
 
                 try:
-                    result = store_complete_hyphae_device_data(ip, room_id, pin)
+                    result = store_complete_hyphae_device_data(
+                        ip, room_id, pin, device_name=name_input.value
+                    )
                     if result.get("success"):
-                        name = (
-                            result.get("data", {})
-                            .get("config", {})
-                            .get("device_name", f"Hyphae-{ip.split('.')[-1]}")
-                        )
+                        name = result.get("device_name") or ip
                         relay_count = len(
                             result.get("data", {})
                             .get("relay_config", {})
@@ -2173,16 +2219,86 @@ _DELETE_DEVICE = {
     "sentinel": delete_device_sentinel,
 }
 
+# device_type -> update function used by the Device Name card.
+_RENAME_DEVICE = {
+    "spore": update_device_spore,
+    "hyphae": update_device_hyphae,
+    "sentinel": update_device_sentinel,
+}
+
+
+def _refresh_device_lists(selected_device: Dict):
+    """Rebuild the device lists and stat cards after a change to a device row.
+
+    Rebuilding a list resets its open-row set, so the expanded panel collapses.
+    """
+    if selected_device is None:
+        return
+    for key in ("_spore_table", "_hyphae_table", "_sentinel_table", "_stat_cards"):
+        ref = selected_device.get(key)
+        if ref is not None:
+            try:
+                ref.refresh()
+            except Exception:
+                pass
+
+
+def _device_name_card(device: Dict, device_type: str, selected_device: Dict = None):
+    """Rename the device as it appears everywhere in Mycelium. Management tab.
+
+    The name is Mycelium's own label: it defaults to the mDNS name when the
+    device is added and no refresh overwrites it, so what is typed here
+    sticks. The hostname stays the device's identity and is shown alongside.
+    """
+    device_id = device.get("device_id")
+    with ui.card().classes("w-full p-4 q-mb-md"):
+        ui.label("Device Name").classes("text-h6 q-mb-sm")
+        ui.label(
+            "How this device is listed on the dashboard, in reports and in "
+            f"alerts. Its hostname ({device.get('hostname') or '—'}) stays as is."
+        ).classes("text-caption text-muted q-mb-sm")
+
+        with ui.row().classes("items-end gap-2 w-full"):
+            name_input = (
+                ui.input(label="Name", value=device.get("device_name") or "")
+                .props("maxlength=64")
+                .classes("flex-1")
+            )
+
+            def _save_name():
+                new_name = (name_input.value or "").strip()
+                if not new_name:
+                    ui.notify("Enter a name.", type="warning")
+                    return
+                if new_name == device.get("device_name"):
+                    ui.notify("Name unchanged.", type="info")
+                    return
+                try:
+                    _RENAME_DEVICE[device_type](device_id, device_name=new_name)
+                except Exception as exc:
+                    ui.notify(f"Rename failed: {exc}", type="negative")
+                    return
+                device["device_name"] = new_name
+                ui.notify(f"Renamed to {new_name}", type="positive")
+                _refresh_device_lists(selected_device)
+
+            ui.button("Save Name", icon="save", on_click=_save_name).props(
+                "outline dense"
+            )
+
 
 def _device_management_panel(
     device: Dict, device_type: str, colors: dict, selected_device: Dict = None
 ):
-    """PIN management, OTA firmware update, and device removal for a single device."""
+    """Name, PIN management, OTA firmware update, and removal for a single device."""
     device_id = device.get("device_id")
 
     from api.services.ota_service import OtaService
 
     ota_svc = OtaService()
+
+    # --- Device name (Mycelium's label for the device) ---
+    _device_name_card(device, device_type, selected_device)
 
     # --- Spore-specific settings (moved here from the old Configuration tab) ---
     if device_type == "spore":
@@ -2274,20 +2390,7 @@ def _device_management_panel(
             confirm_dialog.close()
 
             # Refresh the device lists/stat cards so the removed row disappears.
-            # Rebuilding the list resets its open-row set, collapsing this panel.
-            if selected_device is not None:
-                for key in (
-                    "_spore_table",
-                    "_hyphae_table",
-                    "_sentinel_table",
-                    "_stat_cards",
-                ):
-                    ref = selected_device.get(key)
-                    if ref is not None:
-                        try:
-                            ref.refresh()
-                        except Exception:
-                            pass
+            _refresh_device_lists(selected_device)
 
         with ui.dialog() as confirm_dialog, ui.card():
             ui.label(

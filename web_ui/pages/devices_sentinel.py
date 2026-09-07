@@ -22,6 +22,7 @@ from web_ui.format import fmt_datetime, pm25_aqi_band
 from web_ui.pages.devices import (
     _HOST_PATTERN,
     _SPORE_GRID,
+    _default_device_name,
     _device_list_header,
     _device_management_panel,
     _expandable_device_row,
@@ -96,12 +97,16 @@ def _safe_get_sentinel_devices() -> List[Dict]:
         return []
 
 
-def store_complete_sentinel_device_data(ip: str, room_id=None) -> Dict:
+def store_complete_sentinel_device_data(
+    ip: str, room_id=None, device_name: Optional[str] = None
+) -> Dict:
     """Probe a Sentinel device, register it in the DB, and return the result.
 
-    One probe of /api/readings/latest is enough: unlike Spore, the device name
-    and running firmware version both ride along in that payload. A room is
-    optional — a Sentinel usually monitors the grower's air outside the tents.
+    One probe of /api/readings/latest is enough: unlike Spore, the device's
+    own label and running firmware version both ride along in that payload.
+    `device_name` is the user's choice from the Add dialog; blank means
+    _default_device_name(). A room is optional — a Sentinel usually monitors
+    the grower's air outside the tents.
     """
     # Guard against adding the same device twice (hostname is the stable identity).
     host = normalize_device_host(ip)
@@ -112,7 +117,9 @@ def store_complete_sentinel_device_data(ip: str, room_id=None) -> Dict:
         }
 
     latest = fetch_sentinel_readings_latest(ip) or {}
-    device_name = latest.get("device_name") or ip.split(":")[0]
+    device_name = (device_name or "").strip() or _default_device_name(
+        ip, latest.get("device_name")
+    )
     mac = discover_mac_address(ip) or _placeholder_mac(ip)
     firmware = latest.get("firmware_version") or ""
 
@@ -129,6 +136,7 @@ def store_complete_sentinel_device_data(ip: str, room_id=None) -> Dict:
             "success": True,
             "data": {"latest": latest},
             "device_id": device_id,
+            "device_name": device_name,
         }
     except Exception as e:
         return {"success": False, "errors": [str(e)]}
@@ -138,7 +146,8 @@ def refresh_sentinel_device_data(device_id, ip: str) -> Dict:
     """Re-poll an existing Sentinel and update its status/info in the DB.
 
     Counterpart to refresh_spore_device_data(): refreshes online status,
-    last-seen time, and any changed name/firmware. Marks offline if unreachable.
+    last-seen time, and the firmware version. Marks offline if unreachable.
+    The device name is Mycelium's own label and is left alone.
     """
     latest = fetch_sentinel_readings_latest(ip)
     if latest is None:
@@ -147,14 +156,9 @@ def refresh_sentinel_device_data(device_id, ip: str) -> Dict:
         return {"success": False, "errors": [f"{ip} unreachable."]}
 
     update_device_status(device_id, 1)
-    device_name = latest.get("device_name")
     firmware = latest.get("firmware_version")
-    if device_name or firmware:
-        update_device_sentinel(
-            device_id,
-            device_name=device_name or None,
-            firmware_version=firmware or None,
-        )
+    if firmware:
+        update_device_sentinel(device_id, firmware_version=firmware)
     return {"success": True, "errors": []}
 
 
@@ -275,6 +279,15 @@ def _open_add_sentinel_dialog(table_refresh, stat_cards_refresh):
             },
         ).classes("w-full")
 
+        name_input = (
+            ui.input(
+                label="Device Name (optional)",
+                placeholder="Defaults to the device's own label or its mDNS name",
+            )
+            .props("maxlength=64")
+            .classes("w-full")
+        )
+
         rooms = _room_options()
         room_select = ui.select(
             options=rooms,
@@ -284,8 +297,9 @@ def _open_add_sentinel_dialog(table_refresh, stat_cards_refresh):
         ).classes("w-full")
 
         ui.label(
-            "Enter the device hostname (e.g. sentinel-1234.local). A Sentinel "
-            "monitors the grower's air outside the tents, so a room is optional."
+            "Enter the device hostname (e.g. sentinel-1234.local) and name it. A "
+            "Sentinel monitors the grower's air outside the tents, so a room is "
+            "optional. You can rename it later from its Management tab."
         ).classes("text-muted text-caption q-mt-sm")
 
         with ui.row().classes("w-full justify-end gap-2 q-mt-md"):
@@ -299,14 +313,10 @@ def _open_add_sentinel_dialog(table_refresh, stat_cards_refresh):
 
                 try:
                     result = store_complete_sentinel_device_data(
-                        ip, room_select.value or None
+                        ip, room_select.value or None, device_name=name_input.value
                     )
                     if result.get("success"):
-                        name = (
-                            result.get("data", {})
-                            .get("latest", {})
-                            .get("device_name", ip.split(":")[0])
-                        )
+                        name = result.get("device_name") or ip
                         ui.notify(
                             f'Sentinel device "{name}" added successfully.',
                             type="positive",

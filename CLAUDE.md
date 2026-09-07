@@ -147,6 +147,10 @@ def my_page():
 - Sensitive hub actions (e.g. hub updates) confirm by re-entering the account password (`authenticate_user`); the former "Mycelium PIN" is retired (`user_settings.reset_pin` column kept but unused)
 - Password-manager friendliness: auth inputs sit inside `ui.element('form')` wrappers with `name=`/`autocomplete=` set via `.props()` — never via the `ui.input(autocomplete=...)` kwarg, which is a word-suggestion datalist
 
+**Device naming:**
+- `device_name` is Mycelium's own label for a device, never the device's identity (that is `hostname`). It is set once on Add (`devices._default_device_name`: the user's typed name, else the label the device reports when it is more than its hostname, else the mDNS name `spore-1234`) and renamed from the Device Name card in the Management tab (`_device_name_card`, shared by Spore/Hyphae/Sentinel)
+- Refresh paths (`refresh_*_device_data`, polling services) update firmware/modes/status only — never `device_name` — so a rename sticks. Dashboard, reports and alerts all read `device_name`
+
 **Device credential management:**
 - Device operations use per-device credentials only (`device_pins` table): a legacy 4-8 digit PIN or an 8-64 char device password (firmware 3.6.0+), always sent to the device as the `"pin"` field; the Mycelium account password is never sent to devices
 - Stored Fernet-encrypted with the key in `data/.pin_key`; validated by `is_valid_device_credential()`
