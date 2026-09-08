@@ -4,40 +4,69 @@ Reports tab of the Analytics page.
 A fixed period summary for a room or a hand-picked device set, in this
 order: per-device stats, Compliance (share of samples inside the user's own
 alert thresholds), Equipment (relay run-time for the room's Hyphae), Alerts
-fired in the period, a Daily summary table with CSV download, then the
-comparison chart. The Harvest Analysis sub-tab is unchanged.
+fired in the period, a Daily summary table with CSV download, then three
+insight cards: Control response (how the room's readings react to each
+relay), Room comparison (the room against a baseline Sentinel) and Sensor
+agreement (Spore pairs and per-device anomalies). The Harvest Analysis
+sub-tab is unchanged.
 
-The tab shell and the shared helpers (date picker, chart builders,
+The tab shell and the shared helpers (date picker, chart helpers,
 temperature preference) live in web_ui.pages.analytics, which imports this
 module lazily. All maths lives in api.services.report_service; the worker
 fetch below only gathers rows and calls it.
 """
 
+import bisect
 import csv
 import io
+import itertools
 import logging
 
 from datetime import datetime, timedelta
 
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 from nicegui import ui, run
 
 from web_ui.format import pm25_aqi_band, get_timezone_name, fmt_datetime
+from web_ui.theme import chart_layout
 from web_ui.pages.analytics import (
-    _build_comparison_chart,
+    SERIES_PALETTE,
     _build_harvest_chart,
     _date_picker,
     _device_colour,
     _temp_pref,
 )
 from api.services.report_service import (
+    AGREEMENT_MAX_PAIRS,
+    AGREEMENT_THRESHOLDS,
+    ANOMALY_MAX_INTERVALS,
+    ANOMALY_Z,
     MAX_SAMPLE_GAP_S,
     METRIC_LABELS,
+    NO_RESPONSE_FLOOR,
+    RECOVERY_MIN_DATA_MIN,
+    RESPONSE_POST_MIN,
+    XCORR_DETREND_MIN,
     alert_bounds,
+    baseline_candidates,
     compliance_for_panel,
+    control_response,
+    daily_hours_vs_means,
     daily_rows,
+    device_anomalies,
+    lag_xcorr,
+    mean_frame,
+    pair_agreement,
     parse_utc,
+    pool_responses,
+    readings_frame,
     relay_daily_hours,
     relay_duty,
+    relay_events,
+    relay_label,
+    room_baseline_diff,
+    temp_delta_to_pref,
     temp_unit,
     to_pref_temp,
     utc_bounds,
@@ -49,6 +78,7 @@ from storage.tables import (
     device_hyphae,
     device_sentinel,
     device_spore,
+    grow_rooms,
     readings_hyphae,
     relay_settings,
 )
@@ -231,6 +261,9 @@ def _fetch_report_data(
         "equipment": [],
         "alerts": [],
         "daily": [],
+        "control": {"reason": "not computed"},
+        "comparison": {"reason": "not computed"},
+        "agreement": {"reason": "not computed"},
         "harvests": [],
     }
 
@@ -346,6 +379,48 @@ def _fetch_report_data(
         data["daily"].extend(rows)
     data["daily"].sort(key=lambda r: (r["date"], r["device"]))
 
+    # -- Insight cards: every device on a 1-minute grid, then three blocks ----
+    # Each block returns {"reason": str} when its inputs do not exist for the
+    # selection, and a failure inside one degrades to a reason as well
+    frames = {}
+    for panel in data["panels"]:
+        dev = panel["device"]
+        try:
+            frames[(dev["source"], dev["device_id"])] = readings_frame(
+                panel["readings"]
+            )
+        except Exception as e:
+            logger.warning(f"Failed to grid readings for {dev['label']}: {e}")
+
+    try:
+        data["control"] = _control_block(
+            room_id,
+            hyphae,
+            data["equipment"],
+            data["panels"],
+            frames,
+            data["daily"],
+            start_ts,
+            end_ts,
+        )
+    except Exception as e:
+        logger.warning(f"Failed to build the control response card: {e}")
+        data["control"] = {"reason": "could not be computed (see the log)"}
+
+    try:
+        data["comparison"] = _comparison_block(
+            analytics, room_id, data["panels"], frames, start_ts, end_ts, tz_name
+        )
+    except Exception as e:
+        logger.warning(f"Failed to build the room comparison card: {e}")
+        data["comparison"] = {"reason": "could not be computed (see the log)"}
+
+    try:
+        data["agreement"] = _agreement_block(data["panels"], frames, tz_name)
+    except Exception as e:
+        logger.warning(f"Failed to build the sensor agreement card: {e}")
+        data["agreement"] = {"reason": "could not be computed (see the log)"}
+
     # -- Harvests: period-wide, unchanged --------------------------------------
     try:
         data["harvests"] = analytics.get_harvests_for_period(start_date, end_date)
@@ -369,6 +444,194 @@ def _hyphae_for(dev, equipment):
     return equipment[0]
 
 
+def _control_block(room_id, hyphae, equipment, panels, frames, daily, start_ts, end_ts):
+    """Relay events of the room's Hyphae against the Spores they serve.
+
+    Responses are computed for every (Hyphae, room Spore) pair; the card
+    decides which un-linked Spores appear under which Hyphae (a Spore linked
+    to a Hyphae outside the room counts as un-linked here, as in _hyphae_for).
+    """
+    if room_id is None:
+        return {"reason": "pick a room"}
+    if not hyphae:
+        return {"reason": "no Hyphae in this room"}
+    if not equipment:
+        return {"reason": "relay data for the room's Hyphae could not be loaded"}
+    spores = [
+        {
+            "device_id": p["device"]["device_id"],
+            "name": p["device"]["name"],
+            "linked_hyphae_id": p["device"].get("hyphae_id"),
+            "panel_index": i,
+        }
+        for i, p in enumerate(panels)
+        if p["device"]["source"] == "spore" and p["device"].get("room_id") == room_id
+    ]
+    if not spores:
+        return {"reason": "no Spore from this room is selected"}
+    spore_frames = [frames.get(("spore", s["device_id"])) for s in spores]
+    if not any(f is not None and not f.empty for f in spore_frames):
+        return {"reason": "the selected Spores have no readings in the period"}
+
+    hyphae_ids = {e["device_id"] for e in equipment}
+    unlinked = [s for s in spores if s["linked_hyphae_id"] not in hyphae_ids]
+    out = {
+        "reason": None,
+        "hyphae": [],
+        "spores": spores,
+        "unlinked_default": equipment[0]["device_id"],
+        "needs_selector": bool(unlinked) and len(equipment) > 1,
+    }
+    spore_ids = [s["device_id"] for s in spores]
+    for eq in equipment:
+        hid = eq["device_id"]
+        names = {
+            r["relay_number"]: r.get("relay_name")
+            for r in relay_settings.get_device_relay_settings(hid)
+        }
+        edges = readings_hyphae.get_relay_edges(hid, start_ts, end_ts, MAX_SAMPLE_GAP_S)
+        events = relay_events(edges)
+        responses = {}
+        for s in spores:
+            frame = frames.get(("spore", s["device_id"]))
+            if frame is None:
+                continue
+            responses[s["device_id"]] = {
+                n: control_response(evs, frame) for n, evs in events.items() if evs
+            }
+        active = [r["relay_number"] for r in eq["relays"] if r["on_s"] > 0]
+        out["hyphae"].append(
+            {
+                "device_id": hid,
+                "name": eq["name"],
+                "relays": [
+                    {
+                        "relay_number": n,
+                        "label": relay_label(n, names.get(n)),
+                        "events": len(evs),
+                    }
+                    for n, evs in sorted(events.items())
+                ],
+                "responses": responses,
+                "scatter": daily_hours_vs_means(
+                    eq["daily_hours"], daily, spore_ids, active
+                ),
+            }
+        )
+    if not any(h["relays"] for h in out["hyphae"]):
+        return {"reason": "no relay samples from the room's Hyphae in the period"}
+    return out
+
+
+def _comparison_block(analytics, room_id, panels, frames, start_ts, end_ts, tz_name):
+    """The room's Spore mean against every candidate baseline Sentinel.
+
+    Every candidate is computed here so the card's selector swaps results
+    without another fetch. Candidates not among the picks are fetched with
+    just CO2 and humidity, and their raw rows are dropped at once.
+    """
+    if room_id is None:
+        return {"reason": "pick a room"}
+    room = grow_rooms.get_grow_room(room_id)
+    farm_id = room.get("farm_id") if room else None
+    picked = [
+        p["device"]["device_id"] for p in panels if p["device"]["source"] == "sentinel"
+    ]
+    candidates = baseline_candidates(
+        device_sentinel.get_all_device_sentinel(active_only=True),
+        room_id,
+        farm_id,
+        picked,
+    )
+    if not candidates:
+        return {"reason": "no Sentinel on this farm to use as a baseline"}
+    room_frames = [
+        frames.get(("spore", p["device"]["device_id"]))
+        for p in panels
+        if p["device"]["source"] == "spore" and p["device"].get("room_id") == room_id
+    ]
+    room_frames = [f for f in room_frames if f is not None and not f.empty]
+    if not room_frames:
+        return {"reason": "no selected Spore from this room has readings in the period"}
+    room_mean = mean_frame(room_frames)
+
+    results = {}
+    for c in candidates:
+        cid = c["device_id"]
+        frame = frames.get(("sentinel", cid))
+        if frame is None:
+            try:
+                frame = readings_frame(
+                    analytics.get_sentinel_readings_for_period(
+                        start_ts, end_ts, device_id=cid
+                    ),
+                    ("co2", "humidity"),
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Failed to load baseline readings for {c['label']}: {e}"
+                )
+                results[cid] = {"reason": "its readings could not be loaded"}
+                continue
+        if frame.empty:
+            results[cid] = {"reason": "it has no readings in the period"}
+            continue
+        results[cid] = {
+            "heatmaps": room_baseline_diff(room_mean, frame, tz_name),
+            "xcorr": lag_xcorr(room_mean["co2"], frame["co2"]),
+        }
+    return {
+        "reason": None,
+        "candidates": candidates,
+        "default": candidates[0]["device_id"],
+        "results": results,
+    }
+
+
+def _agreement_block(panels, frames, tz_name):
+    """Pairwise Spore differences per room, and anomalies for every device."""
+    by_room = {}
+    for i, p in enumerate(panels):
+        dev = p["device"]
+        frame = frames.get((dev["source"], dev["device_id"]))
+        if dev["source"] != "spore" or frame is None or frame.empty:
+            continue
+        by_room.setdefault(dev.get("room_id"), []).append((i, dev, frame))
+    pairs = []
+    for members in by_room.values():
+        for (ia, a, fa), (ib, b, fb) in itertools.combinations(members, 2):
+            pairs.append(
+                {
+                    "a": a,
+                    "b": b,
+                    "a_index": ia,
+                    "b_index": ib,
+                    "room": a.get("room"),
+                    "metrics": pair_agreement(fa, fb, tz_name),
+                }
+            )
+    anomalies = []
+    for p in panels:
+        dev = p["device"]
+        frame = frames.get((dev["source"], dev["device_id"]))
+        if frame is None or frame.empty:
+            continue
+        anomalies.append({"device": dev, **device_anomalies(frame, tz_name)})
+    if not pairs and not anomalies:
+        return {"reason": "no selected device has readings in the period"}
+    return {
+        "reason": None,
+        "pairs": pairs[:AGREEMENT_MAX_PAIRS],
+        "pairs_truncated": len(pairs) > AGREEMENT_MAX_PAIRS,
+        "pairs_reason": (
+            None
+            if pairs
+            else "fewer than two Spores in the same room have readings in the period"
+        ),
+        "anomalies": anomalies,
+    }
+
+
 # -- Rendering ----------------------------------------------------------------
 
 
@@ -389,18 +652,18 @@ def _render_reports(container, data, colors):
 
         with ui.tab_panels(sub_tabs, value=env_tab).classes("w-full"):
             # -- Environmental Trends -----------------------------------------
-            # Numbers first, the chart last: stats, compliance, equipment,
-            # alerts, the daily table, then every device on one figure
+            # Numbers first, insight last: stats, compliance, equipment,
+            # alerts, the daily table, then control response, room
+            # comparison and sensor agreement
             with ui.tab_panel(env_tab):
                 _build_device_stats(panels, pref)
                 _build_compliance_card(data["compliance"], pref)
                 _build_equipment_card(data["equipment"])
                 _build_alerts_card(data["alerts"])
                 _build_daily_table(data["daily"], pref, data["period"])
-                with _section_card("Trends"):
-                    ui.plotly(_build_comparison_chart(panels, pref, colors)).classes(
-                        "w-full"
-                    )
+                _build_control_card(data["control"], pref, colors)
+                _build_comparison_card(data["comparison"], colors)
+                _build_agreement_card(data["agreement"], pref, colors)
 
             # -- Harvest Analysis ---------------------------------------------
             with ui.tab_panel(harvest_tab):
@@ -421,6 +684,11 @@ def _section_card(title: str, caption: str = "", badge=None):
         if caption:
             ui.label(caption).classes("text-caption text-muted")
     return card
+
+
+def _not_available(reason: str):
+    """One line saying why a card has nothing to show for this selection."""
+    ui.label(f"Not available: {reason}").classes("text-muted")
 
 
 def _fmt_duration(seconds) -> str:
@@ -862,3 +1130,701 @@ def _build_harvest_analysis(harvests, colors):
         ui.label("Harvest Yields").classes("text-subtitle1 text-weight-bold q-mb-sm")
         fig = _build_harvest_chart(harvests, colors)
         ui.plotly(fig).classes("w-full").style("height: 400px")
+
+
+# -- Insight cards --------------------------------------------------------------
+
+# (frame column, label, unit or None for the user's temperature unit)
+_INSIGHT_METRICS = (
+    ("co2", "CO2", "ppm"),
+    ("humidity", "Humidity", "%"),
+    ("temperature", "Temp", None),
+)
+
+
+def _metric_unit(metric: str, pref: str) -> str:
+    """Display unit of an insight metric ('ppm', '%', or the temperature unit)."""
+    for key, _label, unit in _INSIGHT_METRICS:
+        if key == metric:
+            return unit if unit is not None else temp_unit(pref)
+    return ""
+
+
+def _delta_pref(metric: str, value, pref: str):
+    """A difference in the display unit (temperature scaled, never offset)."""
+    return temp_delta_to_pref(value, pref) if metric == "temperature" else value
+
+
+def _hover_fmt(metric: str) -> str:
+    return ".0f" if metric == "co2" else ".2f"
+
+
+def _legend_top() -> dict:
+    return dict(orientation="h", x=0, xanchor="left", y=1.0, yanchor="bottom")
+
+
+# ---- Control response ----------------------------------------------------------
+
+
+def _build_control_card(control, pref, colors):
+    """How the room's readings react to each relay: superposed-epoch curves.
+
+    One figure per relay with events: the pooled curve over every served
+    Spore drawn bold, each Spore's own curve thin behind it, t=0 marked.
+    Then a table of the numbers and a scatter of daily relay hours against
+    each Spore's daily means. Un-linked Spores follow the room's only
+    Hyphae; with several Hyphae a selector chooses, re-drawing from the
+    pre-computed responses.
+    """
+    unit = temp_unit(pref)
+    floors = (
+        f"{NO_RESPONSE_FLOOR['co2']:g} ppm / {NO_RESPONSE_FLOOR['humidity']:g}% / "
+        f"{temp_delta_to_pref(NO_RESPONSE_FLOOR['temperature'], pref):g} {unit}"
+    )
+    with _section_card(
+        "Control response",
+        "Average change in the served Spores' readings around each relay "
+        f"switching on, from 10 minutes before to {RESPONSE_POST_MIN} after "
+        "(relative to the value at t=0). An event is the first poll seen on, so "
+        f"t=0 is late by up to one poll; test pulses and switches after gaps over "
+        f"{MAX_SAMPLE_GAP_S // 60} minutes are skipped. Recovery is the time after "
+        f"OFF to get halfway back, only when the relay stays off at least "
+        f"{RECOVERY_MIN_DATA_MIN} minutes; events that move less than {floors} "
+        "count as no response.",
+    ):
+        if control.get("reason"):
+            _not_available(control["reason"])
+            return
+
+        hyphae = control["hyphae"]
+        spores = control["spores"]
+        hyphae_ids = {h["device_id"] for h in hyphae}
+        unlinked = [s for s in spores if s["linked_hyphae_id"] not in hyphae_ids]
+        sel = None
+        if control["needs_selector"]:
+            sel = ui.select(
+                {h["device_id"]: h["name"] for h in hyphae},
+                value=control["unlinked_default"],
+                label="Un-linked Spores follow",
+            ).classes("w-64")
+        elif unlinked:
+            ui.label(
+                f"{', '.join(s['name'] for s in unlinked)}: not linked to a Hyphae, "
+                f"assumed served by {hyphae[0]['name']}"
+            ).classes("text-caption text-muted")
+
+        @ui.refreshable
+        def body():
+            follow = sel.value if sel is not None else control["unlinked_default"]
+            for h in hyphae:
+                served = [
+                    s
+                    for s in spores
+                    if s["linked_hyphae_id"] == h["device_id"]
+                    or (
+                        s["linked_hyphae_id"] not in hyphae_ids
+                        and follow == h["device_id"]
+                    )
+                ]
+                _control_hyphae_section(h, served, pref, colors)
+
+        if sel is not None:
+            sel.on("update:model-value", lambda: body.refresh())
+        body()
+
+
+_RESPONSE_COLUMNS = [
+    {"name": "relay", "label": "Relay", "field": "relay", "align": "left"},
+    {"name": "spore", "label": "Spore", "field": "spore", "align": "left"},
+    {"name": "events", "label": "Events", "field": "events", "align": "right"},
+    {"name": "co2", "label": "CO2", "field": "co2", "align": "left"},
+    {"name": "humidity", "label": "Humidity", "field": "humidity", "align": "left"},
+    {"name": "temperature", "label": "Temp", "field": "temperature", "align": "left"},
+]
+
+
+def _control_hyphae_section(h, served, pref, colors):
+    """One Hyphae's relays: a figure per relay with events, the table, the scatter."""
+    ui.label(h["name"]).classes("text-subtitle2 text-weight-bold")
+    if not served:
+        ui.label("No selected Spore is served by this Hyphae").classes(
+            "text-caption text-muted"
+        )
+        return
+    if not h["relays"]:
+        ui.label("No relay samples in the period").classes("text-caption text-muted")
+        return
+
+    table_rows, quiet = [], []
+    for relay in h["relays"]:
+        n = relay["relay_number"]
+        per_spore = [(s, h["responses"].get(s["device_id"], {}).get(n)) for s in served]
+        per_spore = [(s, r) for s, r in per_spore if r]
+        if relay["events"] == 0 or not per_spore:
+            quiet.append(relay["label"])
+            continue
+        pooled = pool_responses([r for _s, r in per_spore])
+        ui.label(
+            f"{relay['label']} — {pooled['events_used']} of {relay['events']} events "
+            "with readings"
+        ).classes("text-caption text-weight-bold")
+        ui.plotly(_response_figure(pooled, per_spore, pref, colors)).classes("w-full")
+        who = "All served" if len(per_spore) > 1 else per_spore[0][0]["name"]
+        table_rows.append(_response_row(relay["label"], who, pooled, pref))
+        if len(per_spore) > 1:
+            for s, r in per_spore:
+                table_rows.append(_response_row(relay["label"], s["name"], r, pref))
+    if quiet:
+        ui.label("No OFF→ON events in the period: " + ", ".join(quiet)).classes(
+            "text-caption text-muted"
+        )
+    if table_rows:
+        for i, row in enumerate(table_rows):
+            row["key"] = i
+        ui.table(columns=_RESPONSE_COLUMNS, rows=table_rows, row_key="key").classes(
+            "w-full"
+        ).props("dense flat")
+
+    labels = {r["relay_number"]: r["label"] for r in h["relays"]}
+    fig = _hours_scatter_figure(h["scatter"], labels, served, colors)
+    if fig is None:
+        ui.label(
+            "Daily relay hours against daily means: no day has both relay hours "
+            "and Spore readings"
+        ).classes("text-caption text-muted")
+    else:
+        ui.label("Daily relay hours against each Spore's daily mean").classes(
+            "text-caption text-weight-bold"
+        )
+        ui.plotly(fig).classes("w-full")
+
+
+def _response_row(relay_text, who, result, pref):
+    """Table row: per metric the delta, time to half of it, recovery, no-response."""
+    row = {"relay": relay_text, "spore": who, "events": result["events_used"]}
+    for metric, _label, _unit in _INSIGHT_METRICS:
+        e = result["metrics"].get(metric) or {}
+        delta = _delta_pref(metric, e.get("delta"), pref)
+        if delta is None:
+            row[metric] = "—"
+            continue
+        unit = _metric_unit(metric, pref)
+        fmt = "{:+.0f}" if metric == "co2" else "{:+.1f}"
+        parts = [f"Δ {fmt.format(delta)} {unit}".replace(" %", "%")]
+        if e.get("t50_min") is not None:
+            parts.append(f"half at {e['t50_min']} min")
+        if e.get("recovery_min") is not None:
+            parts.append(
+                f"recovery {e['recovery_min']:.0f} min ({len(e['recovery_values'])} ev.)"
+            )
+        else:
+            parts.append("recovery n/a")
+        parts.append(
+            f"{e.get('no_response', 0)} of {e.get('events_with_data', 0)} no response"
+        )
+        row[metric] = " · ".join(parts)
+    return row
+
+
+def _response_figure(pooled, per_spore, pref, colors):
+    """CO2 / humidity / temp response rows: pooled bold, each Spore thin, t=0 dotted."""
+    offsets = pooled["offsets"]
+    fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.06)
+    several = len(per_spore) > 1
+    for row, (metric, label, _unit) in enumerate(_INSIGHT_METRICS, start=1):
+        unit = _metric_unit(metric, pref)
+        if several:
+            for s, r in per_spore:
+                fig.add_trace(
+                    go.Scatter(
+                        x=offsets,
+                        y=[
+                            _delta_pref(metric, v, pref)
+                            for v in r["metrics"][metric]["curve"]
+                        ],
+                        name=s["name"],
+                        mode="lines",
+                        line=dict(color=_device_colour(s["panel_index"]), width=1),
+                        opacity=0.8,
+                        legendgroup=f"spore{s['device_id']}",
+                        showlegend=(row == 1),
+                        hovertemplate="%{y:"
+                        + _hover_fmt(metric)
+                        + "}<extra>%{fullData.name}</extra>",
+                    ),
+                    row=row,
+                    col=1,
+                )
+        fig.add_trace(
+            go.Scatter(
+                x=offsets,
+                y=[
+                    _delta_pref(metric, v, pref)
+                    for v in pooled["metrics"][metric]["curve"]
+                ],
+                name="All served Spores" if several else per_spore[0][0]["name"],
+                mode="lines",
+                line=dict(color=colors["primary"], width=3),
+                legendgroup="pooled",
+                showlegend=(row == 1),
+                hovertemplate="%{y:"
+                + _hover_fmt(metric)
+                + "}<extra>%{fullData.name}</extra>",
+            ),
+            row=row,
+            col=1,
+        )
+        fig.update_yaxes(title_text=f"{label} Δ ({unit})", row=row, col=1)
+    fig.add_vline(x=0, line_dash="dot", line_color=colors["text_secondary"])
+    fig.update_xaxes(title_text="Minutes from relay ON", row=3, col=1)
+    fig.update_layout(
+        **chart_layout(colors),
+        margin=dict(l=70, r=20, t=40, b=40),
+        height=460,
+        hovermode="x unified",
+        legend=_legend_top(),
+    )
+    return fig
+
+
+_SCATTER_SYMBOLS = ["circle", "diamond", "square", "triangle-up", "cross", "x"]
+
+
+def _hours_scatter_figure(points, relay_labels, served, colors):
+    """Daily relay hours (x) against daily mean CO2 and humidity (y) per Spore.
+
+    Colour = relay, marker = Spore; None when no point applies to the served Spores.
+    """
+    order = [s["device_id"] for s in served]
+    points = [p for p in points if p["device_id"] in order]
+    if not points:
+        return None
+    groups = {}
+    for p in points:
+        groups.setdefault((p["relay_number"], p["device_id"]), []).append(p)
+    fig = make_subplots(
+        rows=1,
+        cols=2,
+        horizontal_spacing=0.1,
+        subplot_titles=("Daily mean CO2 (ppm)", "Daily mean humidity (%)"),
+    )
+    for (n, sid), group in sorted(groups.items()):
+        colour = SERIES_PALETTE[(n - 1) % len(SERIES_PALETTE)]
+        symbol = _SCATTER_SYMBOLS[order.index(sid) % len(_SCATTER_SYMBOLS)]
+        name = f"{relay_labels.get(n, f'Relay {n}')} · {group[0]['device']}"
+        for col, key in ((1, "co2_avg"), (2, "humidity_avg")):
+            fig.add_trace(
+                go.Scatter(
+                    x=[g["hours"] for g in group],
+                    y=[g[key] for g in group],
+                    mode="markers",
+                    marker=dict(color=colour, symbol=symbol, size=9),
+                    name=name,
+                    text=[g["date"] for g in group],
+                    hovertemplate="%{text}<br>%{x:.1f} h on, mean %{y:.1f}<extra>%{fullData.name}</extra>",
+                    legendgroup=name,
+                    showlegend=(col == 1),
+                ),
+                row=1,
+                col=col,
+            )
+    for col in (1, 2):
+        fig.update_xaxes(title_text="Hours on that day", row=1, col=col)
+    fig.update_layout(
+        **chart_layout(colors),
+        margin=dict(l=60, r=20, t=60, b=40),
+        height=380,
+        legend=_legend_top(),
+    )
+    return fig
+
+
+# ---- Room comparison ------------------------------------------------------------
+
+
+def _build_comparison_card(comparison, colors):
+    """The room's Spore mean against a baseline Sentinel, hour by hour, plus lag.
+
+    The selector lists every candidate (other rooms first, then no room,
+    then the selected room); each was computed in the worker, so switching
+    only re-draws.
+    """
+    with _section_card(
+        "Room comparison",
+        "Selected-room Spore mean minus the baseline Sentinel, per hour of each "
+        "day in your time zone (red: room higher, blue: room lower). The lag curve "
+        "correlates room CO2 with baseline CO2 at every offset within ±2 hours "
+        f"after removing a {XCORR_DETREND_MIN // 60}-hour rolling mean from both, "
+        "so the shared daily cycle does not swamp it; a positive peak lag means "
+        "the room follows the baseline.",
+    ):
+        if comparison.get("reason"):
+            _not_available(comparison["reason"])
+            return
+
+        candidates = comparison["candidates"]
+        results = comparison["results"]
+        sel = ui.select(
+            {
+                c["device_id"]: c["label"] + (" (same room)" if c["same_room"] else "")
+                for c in candidates
+            },
+            value=comparison["default"],
+            label="Baseline Sentinel",
+        ).classes("w-72")
+
+        @ui.refreshable
+        def body():
+            chosen = next((c for c in candidates if c["device_id"] == sel.value), None)
+            res = results.get(sel.value) if chosen else None
+            if not res:
+                _not_available("pick a baseline Sentinel")
+                return
+            if res.get("reason"):
+                _not_available(res["reason"])
+                return
+            if chosen["same_room"]:
+                ui.label(
+                    "This Sentinel is in the selected room, so the map shows the "
+                    "gradient inside the room rather than room versus outside."
+                ).classes("text-caption text-muted")
+            for metric, title in (
+                ("co2", "CO2 difference (ppm)"),
+                ("humidity", "Humidity difference (%)"),
+            ):
+                ui.label(title).classes("text-caption text-weight-bold")
+                hm = res["heatmaps"].get(metric) or {"reason": "not computed"}
+                if hm.get("reason"):
+                    _not_available(hm["reason"])
+                    continue
+                ui.plotly(_heatmap_figure(hm, metric, colors)).classes("w-full")
+
+            ui.label("CO2 lag correlation").classes("text-caption text-weight-bold")
+            xc = res["xcorr"]
+            if xc.get("reason"):
+                _not_available(xc["reason"])
+                return
+            lag = xc["peak_lag"]
+            if lag > 0:
+                who = "the room follows the baseline"
+            elif lag < 0:
+                who = "the baseline follows the room"
+            else:
+                who = "no lag between room and baseline"
+            ui.label(
+                f"Peak r = {xc['peak_corr']:.2f} at {abs(lag)} min: {who} "
+                f"({xc['n']:,} overlapping minutes)"
+            ).classes("text-caption text-muted")
+            ui.plotly(_xcorr_figure(xc, colors)).classes("w-full")
+
+        sel.on("update:model-value", lambda: body.refresh())
+        body()
+
+
+def _heatmap_figure(hm, metric, colors):
+    """Hour-of-day x date heatmap of a difference, diverging around zero."""
+    mid = "#616161" if colors["mode"] == "dark" else "#e0e0e0"
+    fig = go.Figure(
+        go.Heatmap(
+            x=hm["hours"],
+            y=hm["dates"],
+            z=hm["z"],
+            colorscale=[[0.0, "#42a5f5"], [0.5, mid], [1.0, "#ef5350"]],
+            zmid=0,
+            xgap=1,
+            ygap=1,
+            hoverongaps=False,
+            colorbar=dict(thickness=12, title=dict(text=_metric_unit(metric, "C"))),
+            hovertemplate="%{y} %{x}:00 — %{z:"
+            + _hover_fmt(metric)
+            + "}<extra></extra>",
+        )
+    )
+    fig.update_layout(
+        **chart_layout(colors),
+        margin=dict(l=90, r=20, t=10, b=40),
+        height=max(220, 18 * len(hm["dates"]) + 80),
+        xaxis=dict(title="Hour of day", dtick=2),
+        yaxis=dict(type="category", autorange="reversed"),
+    )
+    return fig
+
+
+def _xcorr_figure(xc, colors):
+    """Correlation against lag, the peak lag dotted and zero lag marked."""
+    fig = go.Figure(
+        go.Scatter(
+            x=xc["lags"],
+            y=xc["corr"],
+            mode="lines",
+            line=dict(color=colors["primary"], width=2),
+            name="r",
+            hovertemplate="lag %{x} min: r = %{y:.2f}<extra></extra>",
+        )
+    )
+    fig.add_vline(x=0, line_width=1, line_color=colors["text_muted"])
+    if xc.get("peak_lag") is not None:
+        fig.add_vline(
+            x=xc["peak_lag"], line_dash="dot", line_color=colors["text_secondary"]
+        )
+    fig.update_layout(
+        **chart_layout(colors),
+        margin=dict(l=60, r=20, t=10, b=40),
+        height=260,
+        showlegend=False,
+        xaxis=dict(title="Lag (minutes; positive = room after baseline)"),
+        yaxis=dict(title="Correlation", range=[-1, 1]),
+    )
+    return fig
+
+
+# ---- Sensor agreement -------------------------------------------------------------
+
+
+def _build_agreement_card(agreement, pref, colors):
+    """Spore pairs in the same room, with a settable band, and per-device anomalies.
+
+    The band inputs only change what is drawn and counted: the rolling
+    medians were computed once in the worker, and the share of time outside
+    the band comes from their sorted magnitudes.
+    """
+    unit = temp_unit(pref)
+    with _section_card(
+        "Sensor agreement",
+        "For each pair of Spores in the same room: the rolling 1-hour median of "
+        "their difference against a band you can set, and the rolling 24-hour "
+        "drift of that difference. Below, the stretches where any selected device "
+        f"strays more than {ANOMALY_Z:g} robust standard deviations from its own "
+        "hour-of-day pattern over the period.",
+    ):
+        if agreement.get("reason"):
+            _not_available(agreement["reason"])
+            return
+
+        with ui.row().classes("items-end gap-3 flex-wrap"):
+            inputs = {
+                "co2": ui.number(
+                    "CO2 band (± ppm)",
+                    value=AGREEMENT_THRESHOLDS["co2"],
+                    min=0,
+                    step=10,
+                ),
+                "humidity": ui.number(
+                    "Humidity band (± %)",
+                    value=AGREEMENT_THRESHOLDS["humidity"],
+                    min=0,
+                    step=0.5,
+                ),
+                "temperature": ui.number(
+                    f"Temp band (± {unit})",
+                    value=round(
+                        temp_delta_to_pref(AGREEMENT_THRESHOLDS["temperature"], pref), 2
+                    ),
+                    min=0,
+                    step=0.1,
+                ),
+            }
+            for w in inputs.values():
+                w.classes("w-40").props("dense debounce=400")
+
+        @ui.refreshable
+        def body():
+            bands = {}
+            for metric, w in inputs.items():
+                try:
+                    bands[metric] = max(0.0, float(w.value))
+                except (TypeError, ValueError):
+                    bands[metric] = 0.0
+            # Bands are entered in display units; the medians are Celsius
+            bands_c = dict(bands)
+            if pref == "F":
+                bands_c["temperature"] = bands["temperature"] / 1.8
+
+            if agreement["pairs_reason"]:
+                ui.label(agreement["pairs_reason"]).classes("text-caption text-muted")
+            for pair in agreement["pairs"]:
+                ui.label(
+                    f"{pair['a']['name']} − {pair['b']['name']} · {pair['room']}"
+                ).classes("text-subtitle2 text-weight-bold")
+                ui.label(_pair_caption(pair, bands, bands_c, pref)).classes(
+                    "text-caption text-muted"
+                )
+                ui.plotly(_agreement_figure(pair, bands, pref, colors)).classes(
+                    "w-full"
+                )
+            if agreement["pairs_truncated"]:
+                ui.label(f"Showing the first {AGREEMENT_MAX_PAIRS} pairs").classes(
+                    "text-caption text-muted"
+                )
+            _anomaly_table(agreement["anomalies"], pref)
+
+        for w in inputs.values():
+            w.on("update:model-value", lambda: body.refresh())
+        body()
+
+
+def _pct_outside(sorted_abs, band) -> float:
+    """Share (%) of minutes whose |median| exceeds the band."""
+    if not sorted_abs:
+        return 0.0
+    inside = bisect.bisect_right(sorted_abs, band)
+    return 100.0 * (1 - inside / len(sorted_abs))
+
+
+def _pair_caption(pair, bands, bands_c, pref) -> str:
+    parts = []
+    for metric, label, _unit in _INSIGHT_METRICS:
+        res = pair["metrics"].get(metric) or {"reason": "not computed"}
+        if res.get("reason"):
+            parts.append(f"{label}: {res['reason']}")
+            continue
+        unit = _metric_unit(metric, pref)
+        outside = _pct_outside(res["abs_median_sorted"], bands_c[metric])
+        slope = _delta_pref(metric, res["overall_slope_per_day"], pref)
+        drift = f"{slope:+.1f} {unit}/day" if slope is not None else "drift n/a"
+        parts.append(
+            f"{label}: {outside:.0f}% of the time outside ±{bands[metric]:g} {unit}, "
+            f"drift {drift}".replace(" %", "%")
+        )
+    return " · ".join(parts)
+
+
+def _agreement_figure(pair, bands, pref, colors):
+    """Rows per metric: the rolling median with its band (left), the drift (right)."""
+    fig = make_subplots(
+        rows=3,
+        cols=2,
+        shared_xaxes=True,
+        vertical_spacing=0.07,
+        horizontal_spacing=0.08,
+        column_titles=["Difference (rolling 1 h median)", "Drift (rolling 24 h slope)"],
+    )
+    for row, (metric, label, _unit) in enumerate(_INSIGHT_METRICS, start=1):
+        unit = _metric_unit(metric, pref)
+        res = pair["metrics"].get(metric)
+        fig.update_yaxes(title_text=f"{label} ({unit})", row=row, col=1)
+        fig.update_yaxes(title_text=f"{unit}/day", row=row, col=2)
+        if not res or res.get("reason"):
+            continue
+        fig.add_trace(
+            go.Scatter(
+                x=res["t"],
+                y=[_delta_pref(metric, v, pref) for v in res["median"]],
+                mode="lines",
+                line=dict(color=colors["primary"], width=2),
+                name=f"{label} median",
+                hovertemplate="%{y:"
+                + _hover_fmt(metric)
+                + "}<extra>%{fullData.name}</extra>",
+            ),
+            row=row,
+            col=1,
+        )
+        if bands.get(metric, 0) > 0:
+            fig.add_hrect(
+                y0=-bands[metric],
+                y1=bands[metric],
+                fillcolor=colors["primary"],
+                opacity=0.12,
+                line_width=0,
+                layer="below",
+                row=row,
+                col=1,
+            )
+        fig.add_hline(
+            y=0, line_width=1, line_color=colors["text_muted"], row=row, col=1
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=res["t"],
+                y=[_delta_pref(metric, v, pref) for v in res["slope"]],
+                mode="lines",
+                line=dict(color=SERIES_PALETTE[3], width=2),
+                name=f"{label} drift",
+                hovertemplate="%{y:+.1f}/day<extra>%{fullData.name}</extra>",
+            ),
+            row=row,
+            col=2,
+        )
+        fig.add_hline(
+            y=0, line_width=1, line_color=colors["text_muted"], row=row, col=2
+        )
+    fig.update_layout(
+        **chart_layout(colors),
+        margin=dict(l=70, r=20, t=40, b=40),
+        height=560,
+        hovermode="x unified",
+        showlegend=False,
+    )
+    return fig
+
+
+_ANOMALY_COLUMNS = [
+    {"name": "device", "label": "Device", "field": "device", "align": "left"},
+    {"name": "metric", "label": "Metric", "field": "metric", "align": "left"},
+    {"name": "start", "label": "Start", "field": "start", "align": "left"},
+    {"name": "end", "label": "End", "field": "end", "align": "left"},
+    {"name": "minutes", "label": "Minutes", "field": "minutes", "align": "right"},
+    {"name": "peak_z", "label": "Peak z", "field": "peak_z", "align": "right"},
+    {"name": "value", "label": "Value at peak", "field": "value", "align": "right"},
+]
+
+
+def _anomaly_table(anomalies, pref):
+    """Flagged intervals of every device, largest |z| first."""
+    ui.label("Anomalies").classes("text-subtitle2 text-weight-bold")
+    found = []
+    for a in anomalies:
+        for iv in a["intervals"]:
+            found.append((a["device"], iv))
+    found.sort(key=lambda item: -abs(item[1]["peak_z"]))
+
+    if not found:
+        ui.label(
+            f"No stretch beyond |z| = {ANOMALY_Z:g} for any selected device"
+        ).classes("text-caption text-muted")
+    else:
+        rows = []
+        for i, (dev, iv) in enumerate(found):
+            metric = iv["metric"]
+            value = iv["peak_value"]
+            if metric == "temperature":
+                value = to_pref_temp(value, pref)
+            fmt = "{:.0f}" if metric == "co2" else "{:.1f}"
+            rows.append(
+                {
+                    "key": i,
+                    "device": dev["name"],
+                    "metric": METRIC_LABELS.get(metric, metric),
+                    "start": fmt_datetime(iv["start_utc"]),
+                    "end": fmt_datetime(iv["end_utc"]),
+                    "minutes": iv["minutes"],
+                    "peak_z": f"{iv['peak_z']:+.1f}",
+                    "value": (
+                        f"{fmt.format(value)} {_metric_unit(metric, pref)}".replace(
+                            " %", "%"
+                        )
+                        if value is not None
+                        else "—"
+                    ),
+                }
+            )
+        ui.table(
+            columns=_ANOMALY_COLUMNS, rows=rows, row_key="key", pagination=15
+        ).classes("w-full").props("dense flat")
+
+    capped = [a["device"]["name"] for a in anomalies if a.get("truncated")]
+    if capped:
+        ui.label(
+            f"Showing the {ANOMALY_MAX_INTERVALS} largest stretches for "
+            + ", ".join(capped)
+        ).classes("text-caption text-muted")
+    for a in anomalies:
+        if a.get("skipped"):
+            ui.label(
+                f"{a['device']['name']}: "
+                + ", ".join(
+                    f"{METRIC_LABELS.get(m, m)} {why}"
+                    for m, why in a["skipped"].items()
+                )
+            ).classes("text-caption text-muted")

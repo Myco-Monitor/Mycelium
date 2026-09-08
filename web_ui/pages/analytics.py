@@ -18,13 +18,16 @@ import logging
 from datetime import datetime, timedelta
 
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 from nicegui import ui, app
 
 from web_ui.layout import page_layout, back_to_dashboard
 from web_ui.theme import get_colors, chart_layout
 from web_ui.format import to_user_dt
-from api.services.report_service import temp_unit, to_pref_temp
+from api.services.report_service import (
+    MAX_SAMPLE_GAP_S,
+    relay_label,
+    relay_on_intervals,
+)
 
 from storage.tables import (
     readings_spore,
@@ -35,6 +38,7 @@ from storage.tables import (
     device_spore,
     device_hyphae,
     device_sentinel,
+    relay_settings,
 )
 
 logger = logging.getLogger("web_ui.analytics")
@@ -122,22 +126,10 @@ READINGS_QUERY_LIMIT = 100_000
 # count label, CSV download, and delete).
 PREVIEW_ROW_CAP = 500
 
-# Series colours for the Reports comparison chart (one per device) and the
-# Explore / relay charts (one per metric or relay). Material 400 hues,
+# Series colours: one per device in the Reports cards (selection order), one
+# per metric or relay in the Explore / relay charts. Material 400 hues,
 # readable on the dark template.
 SERIES_PALETTE = ["#ef5350", "#42a5f5", "#66bb6a", "#ffa726", "#ab47bc", "#26c6da"]
-
-# Comparison-chart rows as (readings-row field, axis title). Base rows always
-# appear (the temp title gets the user's unit); Sentinel rows only when a
-# Sentinel is among the selected devices.
-BASE_ROWS = [
-    ("co2", "CO2 (ppm)"),
-    ("humidity", "Humidity (%)"),
-    ("temperature", "Temp"),
-]
-SENTINEL_ROWS = [("pm2_5", "PM2.5 (µg/m³)"), ("voc", "VOC Index"), ("nox", "NOx Index")]
-CHART_ROW_PX = 160  # figure height per metric row
-CHART_BASE_PX = 80  # plus legend and margins
 
 
 def _device_colour(index: int) -> str:
@@ -185,75 +177,6 @@ def _chart_ts(value):
     """
     dt = to_user_dt(value)
     return dt.replace(tzinfo=None) if dt else value
-
-
-def _build_comparison_chart(panels, temp_pref, colors):
-    """One figure, one row per metric, one line per device in its colour.
-
-    Rows share the time axis, so a zoom on any row applies to all. The base
-    rows (CO2, humidity, temp) always appear; the Sentinel rows (PM2.5, VOC,
-    NOx) only when a Sentinel is among the panels, and Spores add no trace
-    there. A device with no readings keeps its legend entry; an empty trace
-    draws nothing.
-    """
-    if not any(p["readings"] for p in panels):
-        return _empty_figure("No environmental data for selected period", colors)
-
-    unit = temp_unit(temp_pref)
-    rows = [
-        (field, f"{label} ({unit})" if field == "temperature" else label)
-        for field, label in BASE_ROWS
-    ]
-    if any(p["device"]["source"] == "sentinel" for p in panels):
-        rows += SENTINEL_ROWS
-    sentinel_fields = {field for field, _label in SENTINEL_ROWS}
-
-    fig = make_subplots(
-        rows=len(rows), cols=1, shared_xaxes=True, vertical_spacing=0.04
-    )
-    for i, panel in enumerate(panels):
-        dev = panel["device"]
-        readings = panel["readings"]
-        x = [_chart_ts(r.get("timestamp", "")) for r in readings]
-        colour = _device_colour(i)
-        # Spore and Sentinel ids come from different tables and can collide,
-        # so the legend group (one click hides the device on every row)
-        # carries the source too
-        group = f"{dev['source']}:{dev['device_id']}"
-        first = True
-        for row, (field, _label) in enumerate(rows, start=1):
-            if field in sentinel_fields and dev["source"] != "sentinel":
-                continue
-            y = [r.get(field) for r in readings]
-            if field == "temperature":
-                y = [to_pref_temp(v, temp_pref) for v in y]
-            fig.add_trace(
-                go.Scatter(
-                    x=x,
-                    y=y,
-                    name=dev["name"],
-                    mode="lines",
-                    line=dict(color=colour),
-                    legendgroup=group,
-                    showlegend=first,
-                ),
-                row=row,
-                col=1,
-            )
-            first = False
-
-    for row, (_field, label) in enumerate(rows, start=1):
-        fig.update_yaxes(title_text=label, row=row, col=1)
-    fig.update_xaxes(title_text="Time", row=len(rows), col=1)
-    fig.update_layout(
-        **chart_layout(colors),
-        margin=dict(l=70, r=20, t=40, b=40),
-        # Height lives in the layout, not CSS, so it follows the row count
-        height=CHART_BASE_PX + CHART_ROW_PX * len(rows),
-        hovermode="x unified",
-        legend=dict(orientation="h", x=0, xanchor="left", y=1.0, yanchor="bottom"),
-    )
-    return fig
 
 
 def _build_harvest_chart(harvests, colors):
@@ -453,15 +376,54 @@ def _query_readings(source: dict, device_id, start, end, relay=None):
     return rows, truncated
 
 
+def _spore_relay_bands(device_id, start, end):
+    """Relay ON stretches of the Hyphae serving a Spore, for shading its chart.
+
+    None when the Spore has no linked Hyphae (or the lookup fails); else one
+    entry per relay that was ever on in the range: {relay_number, label,
+    intervals: [(start, end)]} with naive user-local datetimes, ready for
+    the chart. Test pulses are excluded and an ON run ends at the last
+    sample before an offline gap.
+    """
+    try:
+        dev = device_spore.get_device_spore(device_id)
+        hyphae_id = dev.get("hyphae_id") if dev else None
+        if not hyphae_id:
+            return None
+        names = {
+            r["relay_number"]: r.get("relay_name")
+            for r in relay_settings.get_device_relay_settings(hyphae_id)
+        }
+        edges = readings_hyphae.get_relay_edges(
+            hyphae_id, start or "", _normalize_end_ts(end) or "9999", MAX_SAMPLE_GAP_S
+        )
+    except Exception as e:
+        logger.warning(f"Failed to load relay bands for device {device_id}: {e}")
+        return None
+    bands = []
+    for n, intervals in sorted(relay_on_intervals(edges).items()):
+        if intervals:
+            bands.append(
+                {
+                    "relay_number": n,
+                    "label": relay_label(n, names.get(n)),
+                    "intervals": [(_chart_ts(s), _chart_ts(e)) for s, e in intervals],
+                }
+            )
+    return bands
+
+
 # -- Explore panel ------------------------------------------------------------
 
 
-def _build_metric_chart(rows, metric_specs, chart_type, colors):
+def _build_metric_chart(rows, metric_specs, chart_type, colors, relay_bands=None):
     """Generic multi-metric, multi-axis chart over readings rows.
 
     metric_specs: list of (field, label) in selection order. Metrics with
     differing unit labels are placed on separate y-axes (up to 3). `rows`
-    must already be chronological.
+    must already be chronological. relay_bands (see _spore_relay_bands)
+    draws each relay's ON stretches as translucent bands behind the lines,
+    one legend entry per relay that toggles all of its bands.
     """
     if not rows or not metric_specs:
         return _empty_figure("No data for selected filters", colors)
@@ -476,6 +438,21 @@ def _build_metric_chart(rows, metric_specs, chart_type, colors):
     over_axis_limit = False
 
     fig = go.Figure()
+    # Band colours continue past the metric colours so none matches a line
+    for i, band in enumerate(relay_bands or []):
+        colour = palette[(len(metric_specs) + i) % len(palette)]
+        for k, (x0, x1) in enumerate(band["intervals"]):
+            fig.add_vrect(
+                x0=x0,
+                x1=x1,
+                fillcolor=colour,
+                opacity=0.15,
+                line_width=0,
+                layer="below",
+                name=band["label"],
+                legendgroup=f"relay{band['relay_number']}",
+                showlegend=(k == 0),
+            )
     for i, (field, label) in enumerate(metric_specs):
         if label not in axis_for_label:
             if len(axis_for_label) < len(axis_names):
@@ -678,7 +655,16 @@ def _build_explore_panel(colors):
             fig = _build_relay_chart(rows, colors)
         else:
             metric_specs = [(f, source["metrics"][f]) for f in selected]
-            fig = _build_metric_chart(rows, metric_specs, chart_type, colors)
+            # Spore readings get the serving Hyphae's relay ON stretches
+            # shaded behind them (no-op for un-linked Spores)
+            bands = None
+            if source_select.value == "readings_spore":
+                bands = _spore_relay_bands(
+                    device_id, start_input.value, end_input.value
+                )
+            fig = _build_metric_chart(
+                rows, metric_specs, chart_type, colors, relay_bands=bands
+            )
             if getattr(fig, "_over_axis_limit", False):
                 ui.notify(
                     "More than 3 distinct units selected; extra metrics were dropped",
