@@ -221,6 +221,58 @@ def get_relay_hourly_duty(
     return execute_query(query, (device_id, start_ts, end_ts, max_gap_s, max_gap_s))
 
 
+def get_relay_edges(
+    device_id: int, start_ts: str, end_ts: str, max_gap_s: float = 300
+) -> List[Dict[str, Any]]:
+    """
+    Relay state edges: the samples where something changed, per relay.
+
+    The poller stores a periodic state sample (one row per relay per cycle),
+    not an edge log, so the rows returned are the ones a consumer needs to
+    rebuild ON/OFF transitions and ON intervals without reading every
+    sample: each relay's first sample in range, every sample whose state
+    differs from the previous one, every sample that follows a gap longer
+    than max_gap_s (the device was away, so the state across the gap is
+    unknown), and the last sample in range (closes an interval still open).
+    Rows flagged testing=1 (relay test pulses) are excluded. Needs SQLite
+    3.25+ (window functions).
+
+    Args:
+        device_id (int): ID of the hyphae device
+        start_ts (str): Inclusive lower bound on reading_ts ('T'-separated ISO)
+        end_ts (str): Inclusive upper bound on reading_ts ('T'-separated ISO)
+        max_gap_s (float): Longest sample spacing still treated as continuous
+
+    Returns:
+        List[Dict[str, Any]]: {relay_number, reading_ts, relay_state,
+            prev_state, prev_ts, gap_s, is_last}, ordered by relay then
+            time. prev_state / prev_ts / gap_s are None on a relay's first
+            row; is_last is 1 on its last row in range.
+    """
+    query = """
+    WITH s AS (
+        SELECT relay_number, reading_ts, relay_state,
+               LAG(relay_state) OVER w AS prev_state,
+               LAG(reading_ts) OVER w AS prev_ts,
+               LEAD(reading_ts) OVER w AS next_ts
+        FROM readings_hyphae
+        WHERE device_id = ? AND testing = 0
+          AND reading_ts >= ? AND reading_ts <= ?
+        WINDOW w AS (PARTITION BY relay_number ORDER BY reading_ts)
+    )
+    SELECT relay_number, reading_ts, relay_state, prev_state, prev_ts,
+           (julianday(reading_ts) - julianday(prev_ts)) * 86400.0 AS gap_s,
+           CASE WHEN next_ts IS NULL THEN 1 ELSE 0 END AS is_last
+    FROM s
+    WHERE prev_state IS NULL
+       OR relay_state != prev_state
+       OR next_ts IS NULL
+       OR (julianday(reading_ts) - julianday(prev_ts)) * 86400.0 > ?
+    ORDER BY relay_number, reading_ts
+    """
+    return execute_query(query, (device_id, start_ts, end_ts, max_gap_s))
+
+
 def update_reading(
     device_id: int,
     reading_ts: str,
