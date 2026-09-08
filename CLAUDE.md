@@ -37,7 +37,7 @@ Mycelium/
 │   │   ├── calibration_orchestration_service.py
 │   │   ├── reconnection_service.py      # Pull cached data after offline
 │   │   ├── alert_service.py             # Threshold evaluation
-│   │   ├── report_service.py            # Reports maths: compliance vs alert rules, relay duty, daily buckets
+│   │   ├── report_service.py            # Reports maths: compliance vs alert rules, relay duty, daily buckets, insight cards (relay response, room vs Sentinel, sensor agreement; numpy/pandas)
 │   │   ├── weather_service.py           # OWM weather integration
 │   │   ├── health_service.py            # Device health monitoring
 │   │   └── ...
@@ -53,8 +53,8 @@ Mycelium/
 │   │   ├── devices_sentinel.py # Sentinel tab/detail panels (imported lazily by devices.py)
 │   │   ├── farm_overview.py    # Farm/room CRUD
 │   │   ├── alerts.py           # Alert rules + history
-│   │   ├── analytics.py        # Reports (period summary by Room/Spore/Sentinel), Explore (ad-hoc charts), Data (raw rows)
-│   │   ├── analytics_reports.py # Reports tab: worker fetch + cards (imported lazily by analytics.py)
+│   │   ├── analytics.py        # Reports (period summary by Room/Spore/Sentinel), Explore (ad-hoc charts, relay shading for linked Spores), Data (raw rows)
+│   │   ├── analytics_reports.py # Reports tab: worker fetch + cards incl. control response / room comparison / sensor agreement (imported lazily by analytics.py)
 │   │   ├── business.py         # Business operations
 │   │   ├── fleet_management.py # Firmware upload + batch OTA
 │   │   ├── health_dashboard.py # Device health overview

@@ -5,4 +5,4 @@ all consumers import from here. Bump this value to change the app version --
 run.py and setup.py read it instead of hardcoding their own copies.
 """
 
-__version__ = "2.9.2"
+__version__ = "2.10.0"
