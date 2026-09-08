@@ -4,7 +4,9 @@ Report maths for the Analytics Reports tab.
 Pure functions over rows already fetched from storage: no database access,
 no UI, no app.storage, so everything here is safe inside nicegui.run.io_bound
 and can be exercised offline against any rows. The page passes the user's
-time zone and temperature unit in explicitly.
+time zone and temperature unit in explicitly. The insight cards (control
+response, room comparison, sensor agreement) use numpy and pandas; the rest
+is stdlib.
 
 Compliance uses only the user's own alert rules (threshold_high /
 threshold_low). Mycelium stores no generic CO2 / humidity / temperature
@@ -13,15 +15,62 @@ targets — they are species-specific — so a metric without a rule reports
 """
 
 import logging
+import math
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
+
+import numpy as np
+import pandas as pd
 
 logger = logging.getLogger("services.ReportService")
 
 # Samples further apart than this mean the device was offline: the gap counts
 # as neither ON nor OFF for relays, and ends an excursion run for compliance.
 MAX_SAMPLE_GAP_S = 300
+
+# -- Insight card parameters --------------------------------------------------
+# Readings are put on a 1-minute grid (readings_frame); holes up to this many
+# minutes (normal poll jitter) are forward-filled, offline gaps are not.
+FRAME_FIELDS = ("co2", "humidity", "temperature")
+FRAME_FFILL_LIMIT = 2
+
+# Control response: minutes before / after a relay ON event in each epoch, and
+# how far after OFF to look for the metric to recover halfway (needs at least
+# RECOVERY_MIN_DATA_MIN minutes of data before the next ON).
+RESPONSE_PRE_MIN = 10
+RESPONSE_POST_MIN = 30
+RECOVERY_MAX_MIN = 120
+RECOVERY_MIN_DATA_MIN = 30
+# An event whose own response stays under this is counted as "no response".
+# Judgment values near sensor noise; shown in the card caption.
+NO_RESPONSE_FLOOR = {"co2": 25.0, "humidity": 1.0, "temperature": 0.2}
+
+# Room comparison: lag search range and the minimum overlap for a correlation
+# at any lag; both series are high-passed with a centred rolling mean first,
+# else the shared diurnal cycle flattens the ±2 h correlation curve.
+XCORR_MAX_LAG_MIN = 120
+XCORR_MIN_PAIRS = 120
+XCORR_DETREND_MIN = 180
+HEATMAP_MIN_OVERLAP_MIN = 60
+
+# Sensor agreement: rolling-median window for the pairwise difference, the
+# window of the rolling drift slope, the plot resolution, the default band
+# (Celsius for temperature) and a cap on pairs drawn.
+AGREEMENT_WINDOW_MIN = 60
+AGREEMENT_SLOPE_WINDOW_MIN = 1440
+AGREEMENT_PLOT_STEP = "15min"
+AGREEMENT_THRESHOLDS = {"co2": 100.0, "humidity": 3.0, "temperature": 0.5}
+AGREEMENT_MAX_PAIRS = 15
+
+# Anomalies: |z| above this against an hour-of-day median baseline, needing at
+# least a day of samples; runs closer than the merge gap join, runs shorter
+# than the minimum are noise, and the table is capped.
+ANOMALY_Z = 3.0
+ANOMALY_MIN_SAMPLES = 1440
+ANOMALY_MERGE_GAP_MIN = 2
+ANOMALY_MIN_RUN_MIN = 3
+ANOMALY_MAX_INTERVALS = 50
 
 # Rule metric -> key in the AnalyticsService reading rows. Mirrors
 # alert_service._METRIC_FIELDS but targets the service row shape
@@ -67,6 +116,20 @@ def to_pref_temp(celsius, pref: str) -> Optional[float]:
     except (TypeError, ValueError):
         return None
     return c * 9 / 5 + 32 if pref == "F" else c
+
+
+def temp_delta_to_pref(delta_c, pref: str) -> Optional[float]:
+    """Convert a Celsius difference (delta, band, slope) to the preferred unit.
+
+    Unlike to_pref_temp there is no +32: a change of 1 °C is a change of 1.8 °F.
+    """
+    if delta_c is None:
+        return None
+    try:
+        d = float(delta_c)
+    except (TypeError, ValueError):
+        return None
+    return d * 9 / 5 if pref == "F" else d
 
 
 # -- Timestamps ---------------------------------------------------------------
@@ -426,3 +489,667 @@ def daily_rows(
             row[f"{prefix}_max"] = hi
         rows.append(row)
     return rows
+
+
+# -- 1-minute frames ----------------------------------------------------------
+
+
+def _empty_frame(fields) -> pd.DataFrame:
+    return pd.DataFrame(
+        columns=list(fields), index=pd.DatetimeIndex([], tz="UTC"), dtype="float64"
+    )
+
+
+def _to_list(values) -> List[Optional[float]]:
+    """Float list with NaN as None, so the UI and JSON never see numpy."""
+    return [None if np.isnan(v) else float(v) for v in np.asarray(values, dtype=float)]
+
+
+def _utc_iso(ts) -> str:
+    """Timestamp -> naive-UTC ISO string in the stored format."""
+    return pd.Timestamp(ts).tz_convert("UTC").tz_localize(None).isoformat()
+
+
+def readings_frame(
+    readings: List[Dict], fields=FRAME_FIELDS, ts_key: str = "timestamp"
+) -> pd.DataFrame:
+    """Service reading rows -> float frame on a regular 1-minute UTC grid.
+
+    One column per field (NaN where the row lacks it), the mean of the samples
+    in each minute, and holes up to FRAME_FFILL_LIMIT minutes forward-filled so
+    normal poll jitter leaves no gaps while an offline stretch stays NaN. The
+    index is tz-aware UTC and runs from the first to the last sample. Rows with
+    an unparseable timestamp are dropped; an empty input gives an empty frame
+    with the same columns.
+    """
+    cols = list(fields)
+    if not readings:
+        return _empty_frame(cols)
+    df = pd.DataFrame(readings, columns=[ts_key, *cols])
+    ts = pd.to_datetime(df[ts_key], format="ISO8601", utc=True, errors="coerce")
+    values = df[cols].apply(pd.to_numeric, errors="coerce").astype("float64")
+    values.index = pd.DatetimeIndex(ts)
+    values = values[values.index.notna()].sort_index()
+    if values.empty:
+        return _empty_frame(cols)
+    return values.resample("1min").mean().ffill(limit=FRAME_FFILL_LIMIT)
+
+
+def mean_frame(frames: List[pd.DataFrame]) -> pd.DataFrame:
+    """Minute-by-minute mean across devices, ignoring the ones missing a minute."""
+    frames = [f for f in frames if f is not None and not f.empty]
+    if not frames:
+        return _empty_frame(FRAME_FIELDS)
+    if len(frames) == 1:
+        return frames[0]
+    return pd.concat(frames).groupby(level=0).mean().sort_index()
+
+
+# -- Relay events from state edges --------------------------------------------
+
+
+def relay_events(
+    edges: List[Dict], max_gap_s: float = MAX_SAMPLE_GAP_S
+) -> Dict[int, List[Dict[str, Any]]]:
+    """OFF->ON events per relay from readings_hyphae.get_relay_edges rows.
+
+    An event starts at the first sample seen ON after a sample seen OFF no
+    more than max_gap_s earlier (a switch across an offline gap has no usable
+    time). off_ts is the first sample seen OFF afterwards when that sample is
+    equally reliable, else None; next_on_ts is the relay's following event.
+    Every relay with samples gets a key, even with no events.
+    """
+    out: Dict[int, List[Dict[str, Any]]] = {}
+    open_event: Dict[int, Optional[Dict[str, Any]]] = {}
+    for row in edges:
+        n = row["relay_number"]
+        events = out.setdefault(n, [])
+        state = row.get("relay_state")
+        gap = row.get("gap_s")
+        reliable = (
+            row.get("prev_state") is not None and gap is not None and gap <= max_gap_s
+        )
+        current = open_event.get(n)
+        if current is not None:
+            # Whatever this row is, the open ON run ends here: its end is only
+            # known when this is a reliable OFF sample
+            if state == 0 and reliable:
+                current["off_ts"] = row["reading_ts"]
+            open_event[n] = None
+        if state == 1 and row.get("prev_state") == 0 and reliable:
+            event = {"on_ts": row["reading_ts"], "off_ts": None, "next_on_ts": None}
+            if events:
+                events[-1]["next_on_ts"] = event["on_ts"]
+            events.append(event)
+            open_event[n] = event
+    return out
+
+
+def relay_on_intervals(
+    edges: List[Dict], max_gap_s: float = MAX_SAMPLE_GAP_S
+) -> Dict[int, List[Tuple[str, str]]]:
+    """(start, end) stretches each relay was ON, from get_relay_edges rows.
+
+    A run that was ON when the device went away ends at the last sample
+    before the gap; a run still ON at the last sample ends there.
+    """
+    out: Dict[int, List[Tuple[str, str]]] = {}
+    start_by_relay: Dict[int, Optional[str]] = {}
+
+    def close(n, start, end):
+        if start is not None and end is not None and end > start:
+            out[n].append((start, end))
+        start_by_relay[n] = None
+
+    for row in edges:
+        n = row["relay_number"]
+        out.setdefault(n, [])
+        ts = row["reading_ts"]
+        gap = row.get("gap_s")
+        start = start_by_relay.get(n)
+        if start is not None and gap is not None and gap > max_gap_s:
+            close(n, start, row.get("prev_ts") or ts)
+            start = None
+        if row.get("relay_state") == 1 and start is None:
+            start_by_relay[n] = ts
+            start = ts
+        elif row.get("relay_state") == 0 and start is not None:
+            close(n, start, ts)
+            start = None
+        if row.get("is_last") and start is not None:
+            close(n, start, ts)
+    return out
+
+
+# -- Control response (superposed epochs) --------------------------------------
+
+
+def _grid_positions(idx: pd.DatetimeIndex, stamps: List[str]) -> np.ndarray:
+    """Row index in a 1-minute grid for each stamp, -1 when the minute is absent."""
+    pos = np.full(len(stamps), -1, dtype=int)
+    if len(stamps) == 0 or len(idx) == 0:
+        return pos
+    t = pd.to_datetime(stamps, format="ISO8601", utc=True, errors="coerce").floor("min")
+    ok = ~pd.isna(t)
+    if not ok.any():
+        return pos
+    found = np.asarray(idx.searchsorted(t[ok]))
+    inside = found < len(idx)
+    if inside.any():
+        inside[inside] = idx.asi8[found[inside]] == t[ok].asi8[inside]
+    found[~inside] = -1
+    pos[np.flatnonzero(ok)] = found
+    return pos
+
+
+def _curve_stats(
+    curve: np.ndarray, pre_min: int
+) -> Tuple[Optional[float], Optional[int]]:
+    """(delta, minutes to half of it) from a response curve; None when flat."""
+    post = curve[pre_min + 1 :]
+    if post.size == 0 or np.isnan(post).all():
+        return None, None
+    hi, lo = float(np.nanmax(post)), float(np.nanmin(post))
+    delta = hi if abs(hi) >= abs(lo) else lo
+    if delta == 0:
+        return 0.0, None
+    sign = np.sign(delta)
+    hit = np.flatnonzero((np.sign(post) == sign) & (np.abs(post) >= 0.5 * abs(delta)))
+    return delta, (int(hit[0]) + 1) if hit.size else None
+
+
+def _event_deltas(residuals: np.ndarray) -> np.ndarray:
+    """Per-event extreme of the post-event residuals (rows with data only)."""
+    hi = np.nanmax(residuals, axis=1)
+    lo = np.nanmin(residuals, axis=1)
+    return np.where(np.abs(hi) >= np.abs(lo), hi, lo)
+
+
+def _recovery_minutes(
+    values: np.ndarray, pos_on: int, pos_off: int, limit: int
+) -> Optional[int]:
+    """Minutes after OFF until the metric is back halfway to its value at ON."""
+    if pos_on < 0 or pos_off < 0 or pos_off <= pos_on or limit < RECOVERY_MIN_DATA_MIN:
+        return None
+    v_on, v_off = values[pos_on], values[pos_off]
+    if np.isnan(v_on) or np.isnan(v_off) or v_on == v_off:
+        return None
+    window = values[pos_off : pos_off + limit + 1]
+    if int((~np.isnan(window)).sum()) < RECOVERY_MIN_DATA_MIN:
+        return None
+    target = v_off - 0.5 * (v_off - v_on)
+    back = window <= target if v_off > v_on else window >= target
+    back[0] = False
+    hit = np.flatnonzero(back)
+    return int(hit[0]) if hit.size else None
+
+
+def control_response(
+    events: List[Dict],
+    frame: pd.DataFrame,
+    metrics=FRAME_FIELDS,
+    pre_min: int = RESPONSE_PRE_MIN,
+    post_min: int = RESPONSE_POST_MIN,
+    recovery_max_min: int = RECOVERY_MAX_MIN,
+) -> Dict[str, Any]:
+    """Superposed-epoch response of one device's readings to one relay's events.
+
+    Each event contributes the frame's values from -pre_min to +post_min
+    minutes around its ON minute, relative to the value at t=0; epochs are
+    averaged minute by minute (NaN-aware) into a curve per metric. Per metric:
+    curve, its running sum and count (so pool_responses can merge devices
+    exactly), delta (the curve's largest excursion after t=0), t50_min
+    (minutes to half of it), recovery_min (median minutes after OFF to get
+    halfway back, over the events where that is computable), the recovery
+    values themselves, the number of events with post-event data and how many
+    of those stayed under NO_RESPONSE_FLOOR. Event times are poll stamps, so
+    t=0 is late by up to one poll interval.
+    """
+    offsets = list(range(-pre_min, post_min + 1))
+    width = len(offsets)
+    out: Dict[str, Any] = {
+        "offsets": offsets,
+        "events_total": len(events),
+        "events_used": 0,
+        "metrics": {
+            m: {
+                "curve": [None] * width,
+                "sum": [0.0] * width,
+                "count": [0] * width,
+                "delta": None,
+                "t50_min": None,
+                "recovery_min": None,
+                "recovery_values": [],
+                "no_response": 0,
+                "events_with_data": 0,
+            }
+            for m in metrics
+        },
+    }
+    if not events or frame is None or frame.empty:
+        return out
+
+    idx = frame.index
+    values = frame.reindex(columns=list(metrics)).to_numpy(dtype=float)
+    n_rows = len(idx)
+    pos_on = _grid_positions(idx, [e.get("on_ts") for e in events])
+    inside = pos_on >= 0
+    if not inside.any():
+        return out
+    events_in = [e for e, ok in zip(events, inside) if ok]
+    pos = pos_on[inside]
+
+    rows = pos[:, None] + np.asarray(offsets)[None, :]
+    valid = (rows >= 0) & (rows < n_rows)
+    epochs = np.full((len(pos), width, values.shape[1]), np.nan)
+    epochs[valid] = values[rows[valid]]
+    base = epochs[:, pre_min, :]
+    residual = epochs - base[:, None, :]
+    out["events_used"] = int((~np.isnan(base).all(axis=1)).sum())
+
+    count = (~np.isnan(residual)).sum(axis=0)
+    total = np.nansum(residual, axis=0)
+    curve = np.divide(total, count, out=np.full_like(total, np.nan), where=count > 0)
+
+    pos_off = _grid_positions(idx, [e.get("off_ts") or "" for e in events_in])
+    pos_next = _grid_positions(idx, [e.get("next_on_ts") or "" for e in events_in])
+
+    for j, m in enumerate(metrics):
+        entry = out["metrics"][m]
+        entry["curve"] = _to_list(curve[:, j])
+        entry["sum"] = [float(v) for v in total[:, j]]
+        entry["count"] = [int(v) for v in count[:, j]]
+        entry["delta"], entry["t50_min"] = _curve_stats(curve[:, j], pre_min)
+
+        post = residual[:, pre_min + 1 :, j]
+        with_data = (~np.isnan(post)).sum(axis=1) >= post_min / 2
+        entry["events_with_data"] = int(with_data.sum())
+        if with_data.any():
+            deltas = _event_deltas(post[with_data])
+            entry["no_response"] = int(
+                (np.abs(deltas) < NO_RESPONSE_FLOOR.get(m, 0.0)).sum()
+            )
+
+        recovered = []
+        for k, event in enumerate(events_in):
+            if not event.get("off_ts") or pos_off[k] < 0:
+                continue
+            limit = recovery_max_min
+            if event.get("next_on_ts"):
+                if pos_next[k] < 0:
+                    continue
+                limit = min(limit, int(pos_next[k] - pos_off[k]))
+            minutes = _recovery_minutes(
+                values[:, j], int(pos[k]), int(pos_off[k]), limit
+            )
+            if minutes is not None:
+                recovered.append(minutes)
+        entry["recovery_values"] = recovered
+        if recovered:
+            entry["recovery_min"] = float(np.median(recovered))
+    return out
+
+
+def pool_responses(results: List[Dict]) -> Dict[str, Any]:
+    """Merge control_response results of several devices for the same relay.
+
+    The pooled curve is the exact mean over every epoch of every device
+    (sums and counts add), so it equals one run over the combined epochs.
+    """
+    results = [r for r in results if r and r.get("offsets")]
+    if not results:
+        return {"offsets": [], "events_total": 0, "events_used": 0, "metrics": {}}
+    offsets = results[0]["offsets"]
+    pre_min = -offsets[0]
+    out: Dict[str, Any] = {
+        "offsets": offsets,
+        "events_total": max(r["events_total"] for r in results),
+        "events_used": max(r["events_used"] for r in results),
+        "metrics": {},
+    }
+    for m in results[0]["metrics"]:
+        parts = [r["metrics"][m] for r in results if m in r["metrics"]]
+        total = np.sum([np.asarray(p["sum"], dtype=float) for p in parts], axis=0)
+        count = np.sum([np.asarray(p["count"], dtype=float) for p in parts], axis=0)
+        curve = np.divide(
+            total, count, out=np.full_like(total, np.nan), where=count > 0
+        )
+        delta, t50 = _curve_stats(curve, pre_min)
+        recovered = [v for p in parts for v in p.get("recovery_values", [])]
+        out["metrics"][m] = {
+            "curve": _to_list(curve),
+            "sum": [float(v) for v in total],
+            "count": [int(v) for v in count],
+            "delta": delta,
+            "t50_min": t50,
+            "recovery_min": float(np.median(recovered)) if recovered else None,
+            "recovery_values": recovered,
+            "no_response": sum(p["no_response"] for p in parts),
+            "events_with_data": sum(p["events_with_data"] for p in parts),
+        }
+    return out
+
+
+def daily_hours_vs_means(
+    daily_hours: Dict[str, Dict[int, float]],
+    daily: List[Dict],
+    device_ids: List[int],
+    relay_numbers: List[int],
+) -> List[Dict[str, Any]]:
+    """Scatter points: a Spore's daily mean CO2 / humidity against relay hours.
+
+    daily_hours is relay_daily_hours output for the serving Hyphae; daily is
+    daily_rows output (any devices; only the Spores in device_ids count). One
+    point per (date, device, relay) where both sides have that date.
+    """
+    wanted = set(device_ids)
+    points = []
+    for row in daily:
+        if row.get("source") != "spore" or row.get("device_id") not in wanted:
+            continue
+        hours = daily_hours.get(row["date"], {})
+        for n in relay_numbers:
+            if n not in hours:
+                continue
+            points.append(
+                {
+                    "date": row["date"],
+                    "relay_number": n,
+                    "device_id": row["device_id"],
+                    "device": row["device"],
+                    "hours": hours[n],
+                    "co2_avg": row.get("co2_avg"),
+                    "humidity_avg": row.get("humidity_avg"),
+                }
+            )
+    return points
+
+
+# -- Room comparison against a baseline Sentinel ------------------------------
+
+
+def baseline_candidates(
+    sentinels: List[Dict], room_id, farm_id, picked_ids=()
+) -> List[Dict[str, Any]]:
+    """Sentinels that can serve as the baseline for a room, best default first.
+
+    Kept: Sentinels on the room's farm, Sentinels with no room (they belong
+    to no farm in the schema, so they are offered rather than dropped), and
+    any explicitly picked ones. Order: other rooms on the farm, then no room,
+    then the selected room itself (an in-room baseline only shows the
+    gradient inside the room).
+    """
+    picked = set(picked_ids or ())
+    other, roomless, same = [], [], []
+    for s in sentinels:
+        sid = s["device_id"]
+        s_room = s.get("room_id")
+        on_farm = farm_id is not None and s.get("farm_id") == farm_id
+        if not (on_farm or s_room is None or sid in picked):
+            continue
+        name = s.get("device_name") or f"Sentinel {sid}"
+        entry = {
+            "device_id": sid,
+            "label": f"{name} · {s.get('room_name') or 'no room'}",
+            "room_id": s_room,
+            "same_room": room_id is not None and s_room == room_id,
+        }
+        if s_room is None:
+            roomless.append(entry)
+        elif entry["same_room"]:
+            same.append(entry)
+        else:
+            other.append(entry)
+    for group in (other, roomless, same):
+        group.sort(key=lambda e: e["label"])
+    return other + roomless + same
+
+
+def room_baseline_diff(
+    room: pd.DataFrame,
+    baseline: pd.DataFrame,
+    tz_name: str,
+    metrics=("co2", "humidity"),
+) -> Dict[str, Dict[str, Any]]:
+    """Hourly (room - baseline) as a local date x hour-of-day matrix per metric.
+
+    {metric: {dates, hours, z, n}} with z[date][hour] None where either side
+    has no data that hour, or {metric: {"reason": ...}} when the two overlap
+    for fewer than HEATMAP_MIN_OVERLAP_MIN minutes.
+    """
+    zone = _zone(tz_name)
+    out: Dict[str, Dict[str, Any]] = {}
+    for m in metrics:
+        if m not in room.columns or m not in baseline.columns:
+            out[m] = {"reason": "not measured by both sides"}
+            continue
+        diff = (room[m] - baseline[m]).dropna()
+        n = int(len(diff))
+        if n < HEATMAP_MIN_OVERLAP_MIN:
+            out[m] = {"reason": f"only {n} overlapping minutes of data"}
+            continue
+        hourly = diff.tz_convert(zone).resample("h").mean().dropna()
+        table = (
+            hourly.groupby([hourly.index.date, hourly.index.hour])
+            .mean()
+            .unstack()
+            .reindex(columns=range(24))
+        )
+        out[m] = {
+            "dates": [d.isoformat() for d in table.index],
+            "hours": list(range(24)),
+            "z": [_to_list(row) for row in table.to_numpy(dtype=float)],
+            "n": n,
+        }
+    return out
+
+
+def lag_xcorr(
+    x: pd.Series,
+    y: pd.Series,
+    max_lag: int = XCORR_MAX_LAG_MIN,
+    min_pairs: int = XCORR_MIN_PAIRS,
+    detrend_min: int = XCORR_DETREND_MIN,
+) -> Dict[str, Any]:
+    """Correlation of x(t) with y(t - lag) for lags in +-max_lag minutes.
+
+    A positive peak lag means x follows y. Both series are high-passed by
+    subtracting a centred detrend_min rolling mean first (0 disables). corr
+    holds None at lags with fewer than min_pairs overlapping minutes; the
+    peak is the largest correlation.
+    """
+    lags = list(range(-max_lag, max_lag + 1))
+    out: Dict[str, Any] = {
+        "lags": lags,
+        "corr": [None] * len(lags),
+        "peak_lag": None,
+        "peak_corr": None,
+        "n": 0,
+        "reason": None,
+    }
+    if x is None or y is None or x.empty or y.empty:
+        out["reason"] = "no data on one side"
+        return out
+    x, y = x.align(y, join="inner")
+    n = int((x.notna() & y.notna()).sum())
+    out["n"] = n
+    if n < min_pairs:
+        out["reason"] = f"only {n} overlapping minutes of CO2 data"
+        return out
+    if detrend_min:
+        window = f"{int(detrend_min)}min"
+        periods = max(1, int(detrend_min) // 2)
+        x = x - x.rolling(window, center=True, min_periods=periods).mean()
+        y = y - y.rolling(window, center=True, min_periods=periods).mean()
+    a = x.to_numpy(dtype=float)
+    b = y.to_numpy(dtype=float)
+    size = len(a)
+    corr: List[Optional[float]] = []
+    for lag in lags:
+        if lag >= 0:
+            p, q = a[lag:], b[: size - lag]
+        else:
+            p, q = a[: size + lag], b[-lag:]
+        mask = ~(np.isnan(p) | np.isnan(q))
+        if int(mask.sum()) < min_pairs:
+            corr.append(None)
+            continue
+        p = p[mask] - p[mask].mean()
+        q = q[mask] - q[mask].mean()
+        den = math.sqrt(float(p @ p) * float(q @ q))
+        corr.append(float(p @ q) / den if den > 0 else None)
+    out["corr"] = corr
+    scored = [(c, lag) for c, lag in zip(corr, lags) if c is not None]
+    if not scored:
+        out["reason"] = "too little overlap at every lag"
+        return out
+    out["peak_corr"], out["peak_lag"] = max(scored)
+    return out
+
+
+# -- Sensor agreement -----------------------------------------------------------
+
+
+def pair_agreement(
+    frame_a: pd.DataFrame,
+    frame_b: pd.DataFrame,
+    tz_name: str,
+    metrics=FRAME_FIELDS,
+    window_min: int = AGREEMENT_WINDOW_MIN,
+    slope_window_min: int = AGREEMENT_SLOPE_WINDOW_MIN,
+    plot_step: str = AGREEMENT_PLOT_STEP,
+) -> Dict[str, Dict[str, Any]]:
+    """Rolling median and drift of (a - b) per metric.
+
+    Per metric: t (naive local datetimes at plot_step), median (rolling
+    window_min-minute median of the difference), slope (rolling least-squares
+    slope over slope_window_min, units per day), overall_slope_per_day, and
+    abs_median_sorted (every minute's |median|, sorted, so a caller can count
+    the share of time outside any band without recomputing). Temperature
+    stays in Celsius. {"reason": ...} when the two overlap too little.
+    """
+    zone = _zone(tz_name)
+    out: Dict[str, Dict[str, Any]] = {}
+    for m in metrics:
+        if m not in frame_a.columns or m not in frame_b.columns:
+            out[m] = {"reason": "not measured by both"}
+            continue
+        diff = frame_a[m] - frame_b[m]
+        n = int(diff.notna().sum())
+        if n < window_min:
+            out[m] = {"reason": f"only {n} overlapping minutes of data"}
+            continue
+        diff = diff.loc[diff.first_valid_index() : diff.last_valid_index()]
+        median = diff.rolling(
+            f"{window_min}min", center=True, min_periods=max(1, window_min // 2)
+        ).median()
+
+        # Rolling slope from rolling means of t, d, t*d and t*t over the same
+        # non-NaN minutes: cov(t, d) / var(t), in days
+        t = pd.Series(
+            (diff.index - diff.index[0]) / pd.Timedelta(days=1), index=diff.index
+        )
+        t = t.where(diff.notna())
+        parts = pd.DataFrame({"t": t, "d": diff, "td": t * diff, "tt": t * t})
+        roll = parts.rolling(
+            f"{slope_window_min}min",
+            center=True,
+            min_periods=max(2, slope_window_min // 4),
+        ).mean()
+        var_t = roll["tt"] - roll["t"] ** 2
+        slope = (roll["td"] - roll["t"] * roll["d"]) / var_t.where(var_t > 1e-12)
+
+        mask = diff.notna().to_numpy()
+        overall = None
+        if int(mask.sum()) >= 2:
+            overall = float(
+                np.polyfit(
+                    t.to_numpy(dtype=float)[mask], diff.to_numpy(dtype=float)[mask], 1
+                )[0]
+            )
+
+        plot = (
+            pd.DataFrame({"median": median, "slope": slope}).resample(plot_step).mean()
+        )
+        out[m] = {
+            "t": plot.index.tz_convert(zone).tz_localize(None).to_pydatetime().tolist(),
+            "median": _to_list(plot["median"].to_numpy()),
+            "slope": _to_list(plot["slope"].to_numpy()),
+            "overall_slope_per_day": overall,
+            "abs_median_sorted": np.sort(median.dropna().abs().to_numpy()).tolist(),
+            "n": n,
+        }
+    return out
+
+
+def device_anomalies(
+    frame: pd.DataFrame,
+    tz_name: str,
+    metrics=FRAME_FIELDS,
+    z_thresh: float = ANOMALY_Z,
+    min_samples: int = ANOMALY_MIN_SAMPLES,
+    merge_gap_min: int = ANOMALY_MERGE_GAP_MIN,
+    min_run_min: int = ANOMALY_MIN_RUN_MIN,
+    max_intervals: int = ANOMALY_MAX_INTERVALS,
+) -> Dict[str, Any]:
+    """Minutes that stray from a device's own hour-of-day pattern.
+
+    Per metric the baseline is the median at each local hour of day over the
+    period; the residual is scaled by a robust sigma (1.4826 x MAD, so the
+    spikes being hunted do not inflate it) and minutes with |z| above
+    z_thresh are grouped into intervals (gaps up to merge_gap_min join, runs
+    shorter than min_run_min are dropped). Intervals carry naive-UTC bounds,
+    the span in minutes, the peak z and the raw value there (Celsius for
+    temperature); sorted by |peak z|, capped at max_intervals. skipped names
+    the metrics that could not be scored and why.
+    """
+    out: Dict[str, Any] = {
+        "intervals": [],
+        "sigma": {},
+        "skipped": {},
+        "truncated": False,
+    }
+    if frame is None or frame.empty:
+        out["skipped"] = {m: "no readings" for m in metrics}
+        return out
+    local = frame.tz_convert(_zone(tz_name))
+    intervals = []
+    for m in metrics:
+        if m not in local.columns:
+            out["skipped"][m] = "not measured"
+            continue
+        series = local[m]
+        if int(series.notna().sum()) < min_samples:
+            out["skipped"][m] = f"fewer than {min_samples // 60} h of samples"
+            continue
+        residual = series - series.groupby(series.index.hour).transform("median")
+        mad = (residual - residual.median()).abs().median()
+        sigma = 1.4826 * float(mad) if pd.notna(mad) else 0.0
+        if not sigma > 0:
+            out["skipped"][m] = "no variation to score against"
+            continue
+        out["sigma"][m] = sigma
+        z = (residual / sigma).to_numpy(dtype=float)
+        flagged = np.flatnonzero(np.abs(z) > z_thresh)
+        if flagged.size == 0:
+            continue
+        breaks = np.flatnonzero(np.diff(flagged) > merge_gap_min + 1) + 1
+        for run in np.split(flagged, breaks):
+            span = int(run[-1] - run[0] + 1)
+            if span < min_run_min:
+                continue
+            k = int(run[np.argmax(np.abs(z[run]))])
+            intervals.append(
+                {
+                    "metric": m,
+                    "start_utc": _utc_iso(local.index[int(run[0])]),
+                    "end_utc": _utc_iso(local.index[int(run[-1])]),
+                    "minutes": span,
+                    "peak_z": float(z[k]),
+                    "peak_value": float(series.iloc[k]),
+                }
+            )
+    intervals.sort(key=lambda i: -abs(i["peak_z"]))
+    out["truncated"] = len(intervals) > max_intervals
+    out["intervals"] = intervals[:max_intervals]
+    return out
