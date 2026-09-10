@@ -47,13 +47,14 @@ Mycelium/
 │   ├── theme.py                # 8-color theme + dark/light mode
 │   ├── layout.py               # Shared header, nav drawer, back button
 │   ├── auth.py                 # Login, signup, logout pages
+│   ├── sd_watchdog.py          # systemd WatchdogSec heartbeat from the event loop (no-op outside such a unit)
 │   ├── pages/                  # Application pages (@ui.page routes)
 │   │   ├── dashboard.py        # Main dashboard + weather + pressure cards
 │   │   ├── devices.py          # Device management + centralized control
 │   │   ├── devices_sentinel.py # Sentinel tab/detail panels (imported lazily by devices.py)
 │   │   ├── farm_overview.py    # Farm/room CRUD
 │   │   ├── alerts.py           # Alert rules + history
-│   │   ├── analytics.py        # Reports (period summary by Room/Spore/Sentinel), Explore (ad-hoc charts, relay shading for linked Spores), Data (raw rows)
+│   │   ├── analytics.py        # Reports (period summary by Room/Spore/Sentinel), Explore (ad-hoc charts, relay shading for linked Spores), Data (raw rows); queries + chart builds run via run.io_bound
 │   │   ├── analytics_reports.py # Reports tab: worker fetch + cards incl. control response / room comparison / sensor agreement (imported lazily by analytics.py)
 │   │   ├── business.py         # Business operations
 │   │   ├── fleet_management.py # Firmware upload + batch OTA

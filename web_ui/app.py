@@ -23,6 +23,8 @@ logger = logging.getLogger(__name__)
 
 # Singleton polling service instance (started/stopped via lifecycle hooks)
 _polling_service = None
+# systemd watchdog heartbeat task (None when not running under WatchdogSec=)
+_watchdog_task = None
 
 
 # --- Import pages (registers @ui.page routes) ---
@@ -76,7 +78,7 @@ def mount_rest_api():
 @app.on_startup
 async def on_startup():
     """Start background services."""
-    global _polling_service
+    global _polling_service, _watchdog_task
     mount_rest_api()
 
     from api.services.polling_service import PollingService
@@ -84,6 +86,12 @@ async def on_startup():
     _polling_service = PollingService()
     await _polling_service.start()
     logger.info("Polling service started")
+
+    # Event-loop liveness heartbeat to systemd; a no-op outside a unit with
+    # WatchdogSec= (see web_ui/sd_watchdog.py). Held so it isn't collected.
+    from web_ui import sd_watchdog
+
+    _watchdog_task = sd_watchdog.start()
 
 
 @app.on_shutdown
