@@ -152,19 +152,39 @@ def _to_datetime(value):
     return None
 
 
-def to_user_dt(value):
-    """Coerce a timestamp to an aware datetime in the user's timezone.
+def to_zoned_dt(value, zone):
+    """Coerce a timestamp to an aware datetime in an explicit zone.
 
     Naive inputs are interpreted as UTC (the storage convention). Returns None
-    if the value can't be parsed.
+    if the value can't be parsed; a None zone leaves the datetime in UTC. This
+    is the form for worker threads (run.io_bound), where app.storage.user —
+    and so to_user_dt — is not available: resolve the zone on the UI side
+    with user_zone() and hand it over.
     """
     dt = _to_datetime(value)
     if dt is None:
         return None
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
-    zone = _user_zone()
     return dt.astimezone(zone) if zone else dt
+
+
+def to_user_dt(value):
+    """Coerce a timestamp to an aware datetime in the user's timezone.
+
+    Naive inputs are interpreted as UTC (the storage convention). Returns None
+    if the value can't be parsed.
+    """
+    return to_zoned_dt(value, _user_zone())
+
+
+def user_zone():
+    """ZoneInfo for the current user's timezone (None if tzdata lacks it).
+
+    Reads per-session storage, so call it on the event loop and pass the
+    result to any worker that formats timestamps.
+    """
+    return _user_zone()
 
 
 def fmt_time(value, seconds: bool = False, fallback: str = "—") -> str:

@@ -18,11 +18,11 @@ import logging
 from datetime import datetime, timedelta
 
 import plotly.graph_objects as go
-from nicegui import ui, app
+from nicegui import ui, app, run
 
 from web_ui.layout import page_layout, back_to_dashboard
 from web_ui.theme import get_colors, chart_layout
-from web_ui.format import to_user_dt
+from web_ui.format import to_user_dt, to_zoned_dt, user_zone
 from api.services.report_service import (
     MAX_SAMPLE_GAP_S,
     relay_label,
@@ -170,13 +170,22 @@ def _temp_pref() -> str:
 # -- Chart builders -----------------------------------------------------------
 
 
-def _chart_ts(value):
+def _chart_ts(value, zone=None):
     """Convert a stored (naive UTC) timestamp to a naive user-local datetime.
 
     Plotly renders naive datetimes as-is, so charts show the user's timezone.
+    Pass `zone` (from user_zone(), resolved on the UI side) when calling from
+    a worker thread: the per-user lookup behind to_user_dt is unavailable
+    there, and skipping it is also cheaper across tens of thousands of rows.
     """
-    dt = to_user_dt(value)
+    dt = to_zoned_dt(value, zone) if zone is not None else to_user_dt(value)
     return dt.replace(tzinfo=None) if dt else value
+
+
+def _rgba(hex_colour: str, alpha: float) -> str:
+    """'#rrggbb' -> 'rgba(r,g,b,alpha)' for translucent fills."""
+    r, g, b = (int(hex_colour[i : i + 2], 16) for i in (1, 3, 5))
+    return f"rgba({r},{g},{b},{alpha})"
 
 
 def _build_harvest_chart(harvests, colors):
@@ -349,10 +358,8 @@ def _relay_options(module, device_id) -> dict:
     """{relay_number: label} for a hyphae device, plus an 'All relays' entry."""
     options = {None: "All relays"}
     try:
-        rows = module.get_device_readings(device_id, limit=READINGS_QUERY_LIMIT)
-        for n in sorted(
-            {r["relay_number"] for r in rows if r.get("relay_number") is not None}
-        ):
+        # Newest rows only — this runs on the event loop on every device pick
+        for n in module.get_relay_numbers(device_id):
             options[n] = f"Relay {n}"
     except Exception as e:
         logger.warning(f"Failed to load relay list: {e}")
@@ -376,14 +383,14 @@ def _query_readings(source: dict, device_id, start, end, relay=None):
     return rows, truncated
 
 
-def _spore_relay_bands(device_id, start, end):
+def _spore_relay_bands(device_id, start, end, zone=None):
     """Relay ON stretches of the Hyphae serving a Spore, for shading its chart.
 
     None when the Spore has no linked Hyphae (or the lookup fails); else one
     entry per relay that was ever on in the range: {relay_number, label,
-    intervals: [(start, end)]} with naive user-local datetimes, ready for
-    the chart. Test pulses are excluded and an ON run ends at the last
-    sample before an offline gap.
+    intervals: [(start, end)]} with naive datetimes in `zone` (see
+    _chart_ts), ready for the chart. Test pulses are excluded and an ON run
+    ends at the last sample before an offline gap.
     """
     try:
         dev = device_spore.get_device_spore(device_id)
@@ -407,7 +414,9 @@ def _spore_relay_bands(device_id, start, end):
                 {
                     "relay_number": n,
                     "label": relay_label(n, names.get(n)),
-                    "intervals": [(_chart_ts(s), _chart_ts(e)) for s, e in intervals],
+                    "intervals": [
+                        (_chart_ts(s, zone), _chart_ts(e, zone)) for s, e in intervals
+                    ],
                 }
             )
     return bands
@@ -416,19 +425,22 @@ def _spore_relay_bands(device_id, start, end):
 # -- Explore panel ------------------------------------------------------------
 
 
-def _build_metric_chart(rows, metric_specs, chart_type, colors, relay_bands=None):
+def _build_metric_chart(
+    rows, metric_specs, chart_type, colors, relay_bands=None, zone=None
+):
     """Generic multi-metric, multi-axis chart over readings rows.
 
     metric_specs: list of (field, label) in selection order. Metrics with
     differing unit labels are placed on separate y-axes (up to 3). `rows`
     must already be chronological. relay_bands (see _spore_relay_bands)
     draws each relay's ON stretches as translucent bands behind the lines,
-    one legend entry per relay that toggles all of its bands.
+    one legend entry per relay that toggles all of its bands. `zone` is
+    forwarded to _chart_ts (required off the event loop).
     """
     if not rows or not metric_specs:
         return _empty_figure("No data for selected filters", colors)
 
-    x = [_chart_ts(r.get("reading_ts", "")) for r in rows]
+    x = [_chart_ts(r.get("reading_ts", ""), zone) for r in rows]
     palette = SERIES_PALETTE
 
     # Assign each distinct unit label to an axis (y, y2, y3). Group by the
@@ -438,21 +450,33 @@ def _build_metric_chart(rows, metric_specs, chart_type, colors, relay_bands=None
     over_axis_limit = False
 
     fig = go.Figure()
-    # Band colours continue past the metric colours so none matches a line
+    # Bands go in first so the metric lines draw over them. Each relay is ONE
+    # filled trace — its ON stretches as None-separated rectangles on a hidden
+    # 0..1 axis — which keeps the build linear in the number of stretches.
+    # add_vrect per stretch re-validates every earlier shape, so a month of a
+    # relay cycling every few minutes (thousands of stretches) took the event
+    # loop away for tens of minutes. Band colours continue past the metric
+    # colours so none matches a line.
     for i, band in enumerate(relay_bands or []):
         colour = palette[(len(metric_specs) + i) % len(palette)]
-        for k, (x0, x1) in enumerate(band["intervals"]):
-            fig.add_vrect(
-                x0=x0,
-                x1=x1,
-                fillcolor=colour,
-                opacity=0.15,
-                line_width=0,
-                layer="below",
+        xs, ys = [], []
+        for x0, x1 in band["intervals"]:
+            xs += [x0, x0, x1, x1, None]
+            ys += [0, 1, 1, 0, None]
+        fig.add_trace(
+            go.Scatter(
+                x=xs,
+                y=ys,
                 name=band["label"],
+                yaxis="y4",
+                mode="lines",
+                line=dict(width=0),
+                fill="toself",
+                fillcolor=_rgba(colour, 0.15),
+                hoverinfo="skip",
                 legendgroup=f"relay{band['relay_number']}",
-                showlegend=(k == 0),
             )
+        )
     for i, (field, label) in enumerate(metric_specs):
         if label not in axis_for_label:
             if len(axis_for_label) < len(axis_names):
@@ -523,9 +547,43 @@ def _build_metric_chart(rows, metric_specs, chart_type, colors, relay_bands=None
             position=0.95,
             showgrid=False,
         )
+    if relay_bands:
+        # Hidden full-height axis the band rectangles are drawn against
+        layout["yaxis4"] = dict(
+            overlaying="y", range=[0, 1], visible=False, fixedrange=True
+        )
     fig.update_layout(**layout)
     fig._over_axis_limit = over_axis_limit  # read by caller for a warning
     return fig
+
+
+def _explore_figure(
+    source_key, device_id, selected, relay, start, end, chart_type, colors, zone
+):
+    """Query and chart build for Explore. No UI calls — safe for run.io_bound.
+
+    Returns (figure_json, row_count, truncated, over_axis_limit). The figure
+    goes back as plotly's JSON dict so the serialization of a large series
+    happens here too, not on the event loop.
+    """
+    source = READINGS_SOURCES[source_key]
+    rows, truncated = _query_readings(source, device_id, start, end, relay=relay)
+    over_axis_limit = False
+    # Relay data with no single relay chosen: one stepped trace per relay.
+    if source["has_relay"] and relay is None:
+        fig = _build_relay_chart(rows, colors)
+    else:
+        metric_specs = [(f, source["metrics"][f]) for f in selected]
+        # Spore readings get the serving Hyphae's relay ON stretches shaded
+        # behind them (no-op for un-linked Spores)
+        bands = None
+        if source_key == "readings_spore":
+            bands = _spore_relay_bands(device_id, start, end, zone)
+        fig = _build_metric_chart(
+            rows, metric_specs, chart_type, colors, relay_bands=bands, zone=zone
+        )
+        over_axis_limit = getattr(fig, "_over_axis_limit", False)
+    return fig.to_plotly_json(), len(rows), truncated, over_axis_limit
 
 
 def _build_explore_panel(colors):
@@ -613,6 +671,8 @@ def _build_explore_panel(colors):
 
             device_select.on("update:model-value", lambda _: _on_device_change())
 
+            # Lambdas: the handlers are defined below; NiceGUI awaits the
+            # coroutine a handler returns
             ui.button(
                 "Generate", icon="show_chart", on_click=lambda: _generate()
             ).props("dense")
@@ -620,9 +680,14 @@ def _build_explore_panel(colors):
     # Chart sits under the filter bar and is rebuilt on every Generate
     chart_container = ui.column().classes("w-full gap-2")
 
-    def _generate():
+    # Query + chart build run in a worker thread: on the event loop they held
+    # up every page, the REST API, and device polling for the duration (a
+    # month of one device is tens of thousands of rows). Filter values and the
+    # user's zone are read here, on the UI side, and handed to the worker.
+    async def _generate():
         chart_container.clear()
-        source = READINGS_SOURCES[source_select.value]
+        source_key = source_select.value
+        source = READINGS_SOURCES[source_key]
         device_id = device_select.value
         selected = list(metrics_select.value or [])
         if device_id is None:
@@ -631,49 +696,40 @@ def _build_explore_panel(colors):
         if not selected:
             ui.notify("Pick at least one metric", type="warning")
             return
+        n = ui.notification("Loading chart…", spinner=True, timeout=None)
         try:
-            rows, truncated = _query_readings(
-                source,
+            fig_json, row_count, truncated, over_axis_limit = await run.io_bound(
+                _explore_figure,
+                source_key,
                 device_id,
+                selected,
+                relay_select.value if source["has_relay"] else None,
                 start_input.value,
                 end_input.value,
-                relay=relay_select.value if source["has_relay"] else None,
+                chart_type_select.value or "line",
+                colors,
+                user_zone(),
             )
         except Exception as e:
             ui.notify(f"Query failed: {e}", type="negative")
             return
+        finally:
+            n.dismiss()
 
         if truncated:
             ui.notify(
                 f"Showing newest {READINGS_QUERY_LIMIT:,} points; range may be truncated",
                 type="warning",
             )
-
-        chart_type = chart_type_select.value or "line"
-        # Relay data with no single relay chosen: one stepped trace per relay.
-        if source["has_relay"] and relay_select.value is None:
-            fig = _build_relay_chart(rows, colors)
-        else:
-            metric_specs = [(f, source["metrics"][f]) for f in selected]
-            # Spore readings get the serving Hyphae's relay ON stretches
-            # shaded behind them (no-op for un-linked Spores)
-            bands = None
-            if source_select.value == "readings_spore":
-                bands = _spore_relay_bands(
-                    device_id, start_input.value, end_input.value
-                )
-            fig = _build_metric_chart(
-                rows, metric_specs, chart_type, colors, relay_bands=bands
+        if over_axis_limit:
+            ui.notify(
+                "More than 3 distinct units selected; extra metrics were dropped",
+                type="warning",
             )
-            if getattr(fig, "_over_axis_limit", False):
-                ui.notify(
-                    "More than 3 distinct units selected; extra metrics were dropped",
-                    type="warning",
-                )
 
         with chart_container:
-            ui.plotly(fig).classes("w-full").style("height: 420px")
-            ui.label(f"{len(rows):,} data points").classes("text-caption text-muted")
+            ui.plotly(fig_json).classes("w-full").style("height: 420px")
+            ui.label(f"{row_count:,} data points").classes("text-caption text-muted")
 
     with chart_container:
         ui.label("Choose a source, device, and metrics, then Generate.").classes(
@@ -786,22 +842,30 @@ def _build_data_panel(colors):
                 return []
         return [device_select.value]
 
-    def _collect_rows(source):
+    def _filters(source):
+        """Current filter values, read on the UI side for hand-off to a worker."""
+        return (
+            _target_ids(source),
+            start_input.value,
+            end_input.value,
+            relay_select.value if source["has_relay"] else None,
+        )
+
+    # The row fetch, CSV build, and delete run in a worker thread (see the
+    # Explore panel): with "All devices" the fetch is one full-range query per
+    # device, far too long to hold the event loop for.
+    def _collect_rows(source, ids, start, end, relay):
         """Fetch matching rows across all target devices (chronological per device).
 
         Returns (rows, capped) where capped lists the device ids that hit
         READINGS_QUERY_LIMIT, so callers can warn that only their newest rows
-        were fetched.
+        were fetched. No UI calls — safe for run.io_bound.
         """
         rows, capped = [], []
-        for dev_id in _target_ids(source):
+        for dev_id in ids:
             try:
                 got, truncated = _query_readings(
-                    source,
-                    dev_id,
-                    start_input.value,
-                    end_input.value,
-                    relay=relay_select.value if source["has_relay"] else None,
+                    source, dev_id, start, end, relay=relay
                 )
                 rows.extend(got)
                 if truncated:
@@ -809,6 +873,28 @@ def _build_data_panel(colors):
             except Exception as e:
                 logger.warning(f"Failed to query device {dev_id}: {e}")
         return rows, capped
+
+    def _csv_bytes(rows):
+        output = io.StringIO()
+        writer = csv.DictWriter(output, fieldnames=rows[0].keys())
+        writer.writeheader()
+        writer.writerows(rows)
+        return output.getvalue().encode()
+
+    def _delete_rows(source, ids, start, end, relay):
+        """Delete matching rows for every target device; returns the count."""
+        module = source["module"]
+        end_ts = _normalize_end_ts(end)
+        deleted = 0
+        for dev_id in ids:
+            try:
+                kwargs = {"start_ts": start, "end_ts": end_ts}
+                if source["has_relay"] and relay is not None:
+                    kwargs["relay_number"] = relay
+                deleted += module.delete_device_readings(dev_id, **kwargs)
+            except Exception as e:
+                logger.warning(f"Failed to delete for device {dev_id}: {e}")
+        return deleted
 
     def _cap_warning(capped):
         return (
@@ -824,10 +910,14 @@ def _build_data_panel(colors):
         ) or "device"
         return f"'{name}'"
 
-    def _preview():
+    async def _preview():
         preview_container.clear()
         source = READINGS_SOURCES[source_select.value]
-        rows, capped = _collect_rows(source)
+        n = ui.notification("Loading rows…", spinner=True, timeout=None)
+        try:
+            rows, capped = await run.io_bound(_collect_rows, source, *_filters(source))
+        finally:
+            n.dismiss()
         sel["total"] = len(rows)
 
         with preview_container:
@@ -860,20 +950,21 @@ def _build_data_panel(colors):
                 "w-full"
             ).props("dense")
 
-    def _download():
+    async def _download():
         """Query the current filters and download every matching row as CSV."""
         source = READINGS_SOURCES[source_select.value]
-        rows, capped = _collect_rows(source)
-        if not rows:
-            ui.notify("No rows for the selected filters", type="warning")
-            return
-        output = io.StringIO()
-        writer = csv.DictWriter(output, fieldnames=rows[0].keys())
-        writer.writeheader()
-        writer.writerows(rows)
+        n = ui.notification("Preparing CSV…", spinner=True, timeout=None)
+        try:
+            rows, capped = await run.io_bound(_collect_rows, source, *_filters(source))
+            if not rows:
+                ui.notify("No rows for the selected filters", type="warning")
+                return
+            payload = await run.io_bound(_csv_bytes, rows)
+        finally:
+            n.dismiss()
         scope = "all" if device_select.value == "__all__" else device_select.value
         ui.download(
-            output.getvalue().encode(),
+            payload,
             f"{source_select.value}_{scope}_{start_input.value}_{end_input.value}.csv",
         )
         ui.notify(f"Downloaded {len(rows):,} rows", type="positive")
@@ -906,25 +997,19 @@ def _build_data_panel(colors):
 
         dlg.open()
 
-    def _do_delete(dlg):
+    async def _do_delete(dlg):
         dlg.close()
         if not is_admin():
             ui.notify("Only an admin can delete records.", type="negative")
             return
         source = READINGS_SOURCES[source_select.value]
-        module = source["module"]
-        end_ts = _normalize_end_ts(end_input.value)
-        deleted = 0
-        for dev_id in _target_ids(source):
-            try:
-                kwargs = {"start_ts": start_input.value, "end_ts": end_ts}
-                if source["has_relay"] and relay_select.value is not None:
-                    kwargs["relay_number"] = relay_select.value
-                deleted += module.delete_device_readings(dev_id, **kwargs)
-            except Exception as e:
-                logger.warning(f"Failed to delete for device {dev_id}: {e}")
+        n = ui.notification("Deleting…", spinner=True, timeout=None)
+        try:
+            deleted = await run.io_bound(_delete_rows, source, *_filters(source))
+        finally:
+            n.dismiss()
         ui.notify(f"Deleted {deleted:,} rows", type="positive")
-        _preview()
+        await _preview()
 
     with preview_container:
         ui.label("Choose a source, device, and date range, then Preview.").classes(

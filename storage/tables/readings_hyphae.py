@@ -221,6 +221,34 @@ def get_relay_hourly_duty(
     return execute_query(query, (device_id, start_ts, end_ts, max_gap_s, max_gap_s))
 
 
+def get_relay_numbers(device_id: int, sample: int = 600) -> List[int]:
+    """
+    Distinct relay numbers a hyphae device reports, read from its newest rows.
+
+    The poller writes one row per relay per cycle, so the newest `sample`
+    rows (100 cycles of a 6-relay device) name every relay without scanning
+    the device's whole history; the (device_id, reading_ts DESC) index
+    serves the inner query directly.
+
+    Args:
+        device_id (int): ID of the hyphae device
+        sample (int): Newest rows to inspect
+
+    Returns:
+        List[int]: Relay numbers in ascending order
+    """
+    query = """
+    SELECT DISTINCT relay_number FROM (
+        SELECT relay_number FROM readings_hyphae
+        WHERE device_id = ?
+        ORDER BY reading_ts DESC LIMIT ?
+    )
+    WHERE relay_number IS NOT NULL
+    ORDER BY relay_number
+    """
+    return [r["relay_number"] for r in execute_query(query, (device_id, sample))]
+
+
 def get_relay_edges(
     device_id: int, start_ts: str, end_ts: str, max_gap_s: float = 300
 ) -> List[Dict[str, Any]]:
