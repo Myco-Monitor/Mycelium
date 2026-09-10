@@ -127,14 +127,33 @@ READINGS_QUERY_LIMIT = 100_000
 PREVIEW_ROW_CAP = 500
 
 # Series colours: one per device in the Reports cards (selection order), one
-# per metric or relay in the Explore / relay charts. Material 400 hues,
-# readable on the dark template.
+# per metric in the Explore chart. Material 400 hues, readable on the dark
+# template.
 SERIES_PALETTE = ["#ef5350", "#42a5f5", "#66bb6a", "#ffa726", "#ab47bc", "#26c6da"]
+
+# Relay colours, keyed by relay number so a relay looks the same in every
+# chart, and picked against the page background: Material 800 shades on the
+# light theme, Material 200 tints on the dark one. The Explore bands are a
+# translucent fill, so the hue has to carry the contrast itself -- a mid hue
+# blended into the grey card came out light on light and dark on dark.
+RELAY_PALETTE = {
+    "light": ["#c62828", "#1565c0", "#2e7d32", "#ef6c00", "#6a1b9a", "#00838f"],
+    "dark": ["#ef9a9a", "#90caf9", "#a5d6a7", "#ffcc80", "#ce93d8", "#80deea"],
+}
+# Opacity of a relay's ON band behind the Explore lines. Two bands overlapping
+# still leave the lines readable; one band alone is clearly visible.
+RELAY_BAND_ALPHA = 0.3
 
 
 def _device_colour(index: int) -> str:
     """Colour of the device at `index` in selection order; dot and lines agree."""
     return SERIES_PALETTE[index % len(SERIES_PALETTE)]
+
+
+def _relay_colour(relay_number: int, colors: dict) -> str:
+    """Colour of relay `relay_number` (1-based) on the current theme."""
+    palette = RELAY_PALETTE["dark" if colors["mode"] == "dark" else "light"]
+    return palette[(relay_number - 1) % len(palette)]
 
 
 def _normalize_end_ts(end_date: str) -> str:
@@ -455,10 +474,10 @@ def _build_metric_chart(
     # 0..1 axis — which keeps the build linear in the number of stretches.
     # add_vrect per stretch re-validates every earlier shape, so a month of a
     # relay cycling every few minutes (thousands of stretches) took the event
-    # loop away for tens of minutes. Band colours continue past the metric
-    # colours so none matches a line.
-    for i, band in enumerate(relay_bands or []):
-        colour = palette[(len(metric_specs) + i) % len(palette)]
+    # loop away for tens of minutes. Bands take the relay palette, not the
+    # metric one, so none matches a line.
+    for band in relay_bands or []:
+        colour = _relay_colour(band["relay_number"], colors)
         xs, ys = [], []
         for x0, x1 in band["intervals"]:
             xs += [x0, x0, x1, x1, None]
@@ -472,7 +491,7 @@ def _build_metric_chart(
                 mode="lines",
                 line=dict(width=0),
                 fill="toself",
-                fillcolor=_rgba(colour, 0.15),
+                fillcolor=_rgba(colour, RELAY_BAND_ALPHA),
                 hoverinfo="skip",
                 legendgroup=f"relay{band['relay_number']}",
             )
@@ -741,7 +760,6 @@ def _build_relay_chart(rows, colors):
     """Stepped 0/1 chart with one trace per relay_number."""
     if not rows:
         return _empty_figure("No data for selected filters", colors)
-    palette = SERIES_PALETTE
     by_relay = {}
     for r in rows:
         by_relay.setdefault(r.get("relay_number"), []).append(r)
@@ -755,7 +773,10 @@ def _build_relay_chart(rows, colors):
                 y=[r.get("relay_state") for r in rrows],
                 name=f"Relay {relay}",
                 mode="lines",
-                line=dict(color=palette[i % len(palette)], shape="hv"),
+                line=dict(
+                    color=_relay_colour(relay if relay is not None else i + 1, colors),
+                    shape="hv",
+                ),
             )
         )
     fig.update_layout(

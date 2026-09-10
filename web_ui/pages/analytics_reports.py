@@ -35,6 +35,7 @@ from web_ui.pages.analytics import (
     _build_harvest_chart,
     _date_picker,
     _device_colour,
+    _relay_colour,
     _temp_pref,
 )
 from api.services.report_service import (
@@ -1409,7 +1410,7 @@ def _hours_scatter_figure(points, relay_labels, served, colors):
         subplot_titles=("Daily mean CO2 (ppm)", "Daily mean humidity (%)"),
     )
     for (n, sid), group in sorted(groups.items()):
-        colour = SERIES_PALETTE[(n - 1) % len(SERIES_PALETTE)]
+        colour = _relay_colour(n, colors)
         symbol = _SCATTER_SYMBOLS[order.index(sid) % len(_SCATTER_SYMBOLS)]
         name = f"{relay_labels.get(n, f'Relay {n}')} · {group[0]['device']}"
         for col, key in ((1, "co2_avg"), (2, "humidity_avg")):
