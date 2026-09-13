@@ -6,7 +6,8 @@ Three tabs, each answering a different question:
   (web_ui.pages.analytics_reports, imported lazily since it reuses the
   helpers below)
 - Explore: what exactly happened — free-form charts of raw readings from any
-  readings table, one source at a time
+  readings table, one source at a time, for one device or all of its devices
+  side by side (Pressure spans every barometer: Hyphae, Sentinel, OWM feed)
 - Data: take the rows with you — preview, download CSV, and (admin) delete
   raw readings
 No code execution.
@@ -18,6 +19,7 @@ import logging
 from datetime import datetime, timedelta
 
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 from nicegui import ui, app, run
 
 from web_ui.layout import page_layout, back_to_dashboard
@@ -56,6 +58,27 @@ logger = logging.getLogger("web_ui.analytics")
 # positionally. For readings_hyphae, relay_number is keyword-defaulted None, so
 # the same call shape works without special-casing. The timestamp column is
 # `reading_ts` in all five tables, returned ORDER BY reading_ts DESC.
+#
+# readings_weather is the odd one out: its device_id is the user_id of the
+# OWM location the poller stored the feed under (weather_service), not a
+# device, so its device list is Mycelium's own feed, one entry per location.
+
+
+def _weather_devices():
+    """Device-list rows for the weather source: Mycelium's OWM feed per location."""
+    return [
+        {
+            "device_id": loc["device_id"],
+            "device_name": "Mycelium",
+            "room_name": (
+                f"OWM {loc['owm_zip_code']}"
+                if loc.get("owm_zip_code")
+                else f"OWM (user {loc['device_id']})"
+            ),
+        }
+        for loc in readings_weather.get_locations()
+    ]
+
 
 READINGS_SOURCES = {
     "readings_spore": {
@@ -90,7 +113,7 @@ READINGS_SOURCES = {
     "readings_weather": {
         "label": "Weather Readings",
         "module": readings_weather,
-        "device_fn": lambda: device_spore.get_all_device_spore(active_only=True),
+        "device_fn": _weather_devices,
         # Humidity before temp per the standard metric order (no CO2 here)
         "metrics": {
             "humidity": "Humidity (%)",
@@ -126,9 +149,25 @@ READINGS_QUERY_LIMIT = 100_000
 # count label, CSV download, and delete).
 PREVIEW_ROW_CAP = 500
 
-# Series colours: one per device in the Reports cards (selection order), one
-# per metric in the Explore chart. Material 400 hues, readable on the dark
-# template.
+# Explore's Pressure source spans every table with a barometric column, so a
+# Hyphae's BMP581, a Sentinel's BMP581 and the OWM feed compare on one axis
+# (all hPa). Data keeps Pressure = the readings_pressure table alone. Each
+# member: (readings source key, its hPa column).
+PRESSURE_MEMBERS = [
+    ("readings_pressure", "pressure_hpa"),
+    ("readings_sentinel", "pressure_hpa"),
+    ("readings_weather", "ambient_pressure"),
+]
+
+# Explore comparison charts (one subplot row per metric, or per Hyphae for
+# relays) size themselves as base + per-row px. The height lives in the
+# layout, not CSS, so the container follows the row count.
+COMPARE_BASE_PX = 120
+COMPARE_ROW_PX = 220
+
+# Series colours: one per device in the Reports cards (selection order) and in
+# the Explore comparison chart, one per metric in the single-device Explore
+# chart. Material 400 hues, readable on the dark template.
 SERIES_PALETTE = ["#ef5350", "#42a5f5", "#66bb6a", "#ffa726", "#ab47bc", "#26c6da"]
 
 # Relay colours, keyed by relay number so a relay looks the same in every
@@ -360,17 +399,59 @@ def _date_picker(label: str, value: str):
     return date_input
 
 
+def _device_name(d: dict) -> str:
+    return d.get("device_name") or f"Device {d['device_id']}"
+
+
+def _device_label(d: dict) -> str:
+    """'name · room' for a device-list row."""
+    return f"{_device_name(d)} · {d.get('room_name') or 'no room'}"
+
+
 def _device_options(source: dict) -> dict:
     """{device_id: 'name · room'} options for a source's device list."""
     options = {}
     try:
         for d in source["device_fn"]():
-            name = d.get("device_name") or f"Device {d['device_id']}"
-            room = d.get("room_name") or "no room"
-            options[d["device_id"]] = f"{name} · {room}"
+            options[d["device_id"]] = _device_label(d)
     except Exception as e:
         logger.warning(f"Failed to load device list: {e}")
     return options
+
+
+def _explore_targets(source_key: str) -> list:
+    """Chartable devices of an Explore source, one target dict each.
+
+    A target names the readings source and device to query plus `columns`,
+    the row column behind each of the source's metric keys: identity for
+    every source except Pressure, whose members (PRESSURE_MEMBERS) come from
+    three tables. `key` ("source:id") is the select value and the legend
+    group; Spore and Sentinel ids come from different tables and can collide.
+    """
+    if source_key == "readings_pressure":
+        members = [(k, {"pressure_hpa": col}) for k, col in PRESSURE_MEMBERS]
+    else:
+        metrics = READINGS_SOURCES[source_key]["metrics"]
+        members = [(source_key, {m: m for m in metrics})]
+    targets = []
+    for member_key, columns in members:
+        try:
+            devices = READINGS_SOURCES[member_key]["device_fn"]()
+        except Exception as e:
+            logger.warning(f"Failed to load device list: {e}")
+            continue
+        for d in devices:
+            targets.append(
+                {
+                    "key": f"{member_key}:{d['device_id']}",
+                    "source": member_key,
+                    "device_id": d["device_id"],
+                    "name": _device_name(d),
+                    "label": _device_label(d),
+                    "columns": columns,
+                }
+            )
+    return targets
 
 
 def _relay_options(module, device_id) -> dict:
@@ -444,6 +525,19 @@ def _spore_relay_bands(device_id, start, end, zone=None):
 # -- Explore panel ------------------------------------------------------------
 
 
+def _metric_trace(chart_type, x, y, name, colour, **kw):
+    """One trace of the Explore chart kinds: line, area, bar or stepped."""
+    if chart_type == "bar":
+        return go.Bar(x=x, y=y, name=name, marker_color=colour, **kw)
+    line = dict(color=colour)
+    fill = None
+    if chart_type == "stepped":
+        line["shape"] = "hv"
+    elif chart_type == "area":
+        fill = "tozeroy"
+    return go.Scatter(x=x, y=y, name=name, mode="lines", line=line, fill=fill, **kw)
+
+
 def _build_metric_chart(
     rows, metric_specs, chart_type, colors, relay_bands=None, zone=None
 ):
@@ -506,43 +600,7 @@ def _build_metric_chart(
         yaxis = axis_for_label[label]
         color = palette[i % len(palette)]
         y = [r.get(field) for r in rows]
-
-        if chart_type == "bar":
-            fig.add_trace(go.Bar(x=x, y=y, name=label, yaxis=yaxis, marker_color=color))
-        elif chart_type == "stepped":
-            fig.add_trace(
-                go.Scatter(
-                    x=x,
-                    y=y,
-                    name=label,
-                    yaxis=yaxis,
-                    mode="lines",
-                    line=dict(color=color, shape="hv"),
-                )
-            )
-        elif chart_type == "area":
-            fig.add_trace(
-                go.Scatter(
-                    x=x,
-                    y=y,
-                    name=label,
-                    yaxis=yaxis,
-                    mode="lines",
-                    fill="tozeroy",
-                    line=dict(color=color),
-                )
-            )
-        else:  # line
-            fig.add_trace(
-                go.Scatter(
-                    x=x,
-                    y=y,
-                    name=label,
-                    yaxis=yaxis,
-                    mode="lines",
-                    line=dict(color=color),
-                )
-            )
+        fig.add_trace(_metric_trace(chart_type, x, y, label, color, yaxis=yaxis))
 
     # Build axis layout from the labels we actually assigned.
     label_by_axis = {v: k for k, v in axis_for_label.items()}
@@ -576,39 +634,130 @@ def _build_metric_chart(
     return fig
 
 
+def _build_comparison_chart(series, metric_specs, chart_type, colors, zone=None):
+    """One figure, one subplot row per metric, one trace per device in each.
+
+    series: [(target, rows)] in device order, rows chronological. The rows
+    share the time axis, so a zoom on any row applies to all, and each metric
+    owns its axis so there is no unit limit. A device's traces share a legend
+    group keyed by the target, so one legend click hides it on every row; a
+    device with no rows keeps its legend entry and draws nothing.
+    """
+    if not metric_specs or not any(rows for _t, rows in series):
+        return _empty_figure("No data for selected filters", colors)
+    fig = make_subplots(
+        rows=len(metric_specs), cols=1, shared_xaxes=True, vertical_spacing=0.04
+    )
+    for i, (target, rows) in enumerate(series):
+        x = [_chart_ts(r.get("reading_ts", ""), zone) for r in rows]
+        colour = _device_colour(i)
+        for row, (field, _label) in enumerate(metric_specs, start=1):
+            fig.add_trace(
+                _metric_trace(
+                    chart_type,
+                    x,
+                    [r.get(field) for r in rows],
+                    target["name"],
+                    colour,
+                    legendgroup=target["key"],
+                    showlegend=(row == 1),
+                ),
+                row=row,
+                col=1,
+            )
+    for row, (_field, label) in enumerate(metric_specs, start=1):
+        fig.update_yaxes(title_text=label, row=row, col=1)
+    fig.update_xaxes(title_text="Time", row=len(metric_specs), col=1)
+    fig.update_layout(
+        **chart_layout(colors),
+        margin=dict(l=70, r=20, t=40, b=40),
+        height=COMPARE_BASE_PX + COMPARE_ROW_PX * len(metric_specs),
+        hovermode="x unified",
+        legend=dict(orientation="h", x=0, xanchor="left", y=1.0, yanchor="bottom"),
+    )
+    return fig
+
+
 def _explore_figure(
-    source_key, device_id, selected, relay, start, end, chart_type, colors, zone
+    source_key, targets, selected, relay, start, end, chart_type, colors, zone
 ):
     """Query and chart build for Explore. No UI calls — safe for run.io_bound.
 
-    Returns (figure_json, row_count, truncated, over_axis_limit). The figure
-    goes back as plotly's JSON dict so the serialization of a large series
+    targets: the _explore_targets dicts to chart (one, or all of the source).
+    Returns {"fig": plotly JSON dict, "rows": total row count, "capped":
+    names of devices that hit READINGS_QUERY_LIMIT, "over_axis_limit": bool}.
+    The figure goes back as JSON so the serialization of a large series
     happens here too, not on the event loop.
     """
     source = READINGS_SOURCES[source_key]
-    rows, truncated = _query_readings(source, device_id, start, end, relay=relay)
+    series, capped = [], []
+    for t in targets:
+        rows, truncated = _query_readings(
+            READINGS_SOURCES[t["source"]], t["device_id"], start, end, relay=relay
+        )
+        if truncated:
+            capped.append(t["name"])
+        # A member table that keeps a metric under another column name
+        # (weather's ambient_pressure under Pressure) is projected onto the
+        # source's metric keys so every builder reads the same field
+        if any(k != v for k, v in t["columns"].items()):
+            rows = [
+                {
+                    "reading_ts": r.get("reading_ts"),
+                    **{k: r.get(v) for k, v in t["columns"].items()},
+                }
+                for r in rows
+            ]
+        series.append((t, rows))
     over_axis_limit = False
-    # Relay data with no single relay chosen: one stepped trace per relay.
     if source["has_relay"] and relay is None:
-        fig = _build_relay_chart(rows, colors)
+        # Relay data with no single relay chosen: one stepped trace per relay
+        if len(series) == 1:
+            fig = _build_relay_chart(series[0][1], colors, zone)
+        else:
+            fig = _build_relay_comparison_chart(series, colors, zone)
     else:
         metric_specs = [(f, source["metrics"][f]) for f in selected]
-        # Spore readings get the serving Hyphae's relay ON stretches shaded
-        # behind them (no-op for un-linked Spores)
-        bands = None
-        if source_key == "readings_spore":
-            bands = _spore_relay_bands(device_id, start, end, zone)
-        fig = _build_metric_chart(
-            rows, metric_specs, chart_type, colors, relay_bands=bands, zone=zone
-        )
-        over_axis_limit = getattr(fig, "_over_axis_limit", False)
-    return fig.to_plotly_json(), len(rows), truncated, over_axis_limit
+        if len(series) == 1:
+            t, rows = series[0]
+            # Spore readings get the serving Hyphae's relay ON stretches shaded
+            # behind them (no-op for un-linked Spores)
+            bands = None
+            if t["source"] == "readings_spore":
+                bands = _spore_relay_bands(t["device_id"], start, end, zone)
+            fig = _build_metric_chart(
+                rows, metric_specs, chart_type, colors, relay_bands=bands, zone=zone
+            )
+            over_axis_limit = getattr(fig, "_over_axis_limit", False)
+        else:
+            # Grouped bars for several devices over thousands of samples are
+            # unreadable and slow to draw; devices compare as lines instead
+            if chart_type == "bar":
+                chart_type = "line"
+            fig = _build_comparison_chart(
+                series, metric_specs, chart_type, colors, zone
+            )
+    return {
+        "fig": fig.to_plotly_json(),
+        "rows": sum(len(rows) for _t, rows in series),
+        "capped": capped,
+        "over_axis_limit": over_axis_limit,
+    }
 
 
 def _build_explore_panel(colors):
     """Free-form chart builder over the readings tables (no code)."""
     default_source = "readings_spore"
     src = READINGS_SOURCES[default_source]
+
+    # Chartable devices of the current source by select value (see
+    # _explore_targets); rebuilt on every source change
+    targets_by_key = {t["key"]: t for t in _explore_targets(default_source)}
+
+    def _device_select_options():
+        options = {"__all__": "All devices"}
+        options.update({k: t["label"] for k, t in targets_by_key.items()})
+        return options
 
     today = datetime.now().strftime("%Y-%m-%d")
     default_start = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
@@ -621,7 +770,7 @@ def _build_explore_panel(colors):
                 label="Data Source",
             ).classes("w-52")
 
-            device_select = ui.select(_device_options(src), label="Device").classes(
+            device_select = ui.select(_device_select_options(), label="Device").classes(
                 "w-52"
             )
 
@@ -657,7 +806,11 @@ def _build_explore_panel(colors):
 
             def _on_source_change():
                 new_src = READINGS_SOURCES[source_select.value]
-                device_select.options = _device_options(new_src)
+                targets_by_key.clear()
+                targets_by_key.update(
+                    {t["key"]: t for t in _explore_targets(source_select.value)}
+                )
+                device_select.options = _device_select_options()
                 device_select.value = None
                 device_select.update()
                 metrics_select.options = new_src["metrics"]
@@ -681,9 +834,14 @@ def _build_explore_panel(colors):
 
             def _on_device_change():
                 new_src = READINGS_SOURCES[source_select.value]
-                if new_src["has_relay"] and device_select.value is not None:
-                    relay_select.options = _relay_options(
-                        new_src["module"], device_select.value
+                target = targets_by_key.get(device_select.value)
+                if new_src["has_relay"]:
+                    # One Hyphae lists its relays; "All devices" charts every
+                    # relay of every Hyphae, so only "All relays" applies
+                    relay_select.options = (
+                        _relay_options(new_src["module"], target["device_id"])
+                        if target
+                        else {None: "All relays"}
                     )
                     relay_select.value = None
                     relay_select.update()
@@ -707,22 +865,34 @@ def _build_explore_panel(colors):
         chart_container.clear()
         source_key = source_select.value
         source = READINGS_SOURCES[source_key]
-        device_id = device_select.value
+        picked = device_select.value
         selected = list(metrics_select.value or [])
-        if device_id is None:
+        if picked is None:
             ui.notify("Pick a device", type="warning")
+            return
+        targets = (
+            list(targets_by_key.values())
+            if picked == "__all__"
+            else [targets_by_key[picked]]
+        )
+        if not targets:
+            ui.notify("No devices with data for this source", type="warning")
             return
         if not selected:
             ui.notify("Pick at least one metric", type="warning")
             return
+        # A single relay applies to one Hyphae; all devices chart all relays
+        relay = None
+        if source["has_relay"] and picked != "__all__":
+            relay = relay_select.value
         n = ui.notification("Loading chart…", spinner=True, timeout=None)
         try:
-            fig_json, row_count, truncated, over_axis_limit = await run.io_bound(
+            result = await run.io_bound(
                 _explore_figure,
                 source_key,
-                device_id,
+                targets,
                 selected,
-                relay_select.value if source["has_relay"] else None,
+                relay,
                 start_input.value,
                 end_input.value,
                 chart_type_select.value or "line",
@@ -735,41 +905,54 @@ def _build_explore_panel(colors):
         finally:
             n.dismiss()
 
-        if truncated:
+        if result["capped"]:
             ui.notify(
-                f"Showing newest {READINGS_QUERY_LIMIT:,} points; range may be truncated",
+                f"{', '.join(result['capped'])}: only the newest "
+                f"{READINGS_QUERY_LIMIT:,} rows are shown — narrow the date range",
                 type="warning",
             )
-        if over_axis_limit:
+        if result["over_axis_limit"]:
             ui.notify(
                 "More than 3 distinct units selected; extra metrics were dropped",
                 type="warning",
             )
 
+        fig_json = result["fig"]
+        # Comparison figures carry their height in the layout (one subplot
+        # row per metric or device); the single chart keeps the card default
+        height = fig_json.get("layout", {}).get("height") or 420
         with chart_container:
-            ui.plotly(fig_json).classes("w-full").style("height: 420px")
-            ui.label(f"{row_count:,} data points").classes("text-caption text-muted")
+            ui.plotly(fig_json).classes("w-full").style(f"height: {height}px")
+            ui.label(f"{result['rows']:,} data points").classes(
+                "text-caption text-muted"
+            )
 
     with chart_container:
-        ui.label("Choose a source, device, and metrics, then Generate.").classes(
-            "text-muted p-4"
-        )
+        ui.label(
+            "Choose a source, a device or all devices, and metrics, then Generate."
+        ).classes("text-muted p-4")
 
 
-def _build_relay_chart(rows, colors):
-    """Stepped 0/1 chart with one trace per relay_number."""
-    if not rows:
-        return _empty_figure("No data for selected filters", colors)
+def _add_relay_traces(fig, rows, colors, zone=None, row=None, legend_seen=None):
+    """Add one stepped 0/1 trace per relay_number in `rows` to fig.
+
+    `row` targets a subplot row (None on a plain figure). Traces share a
+    legend group per relay number; with `legend_seen` (a set the caller keeps
+    across rows) a relay gets its legend entry the first time it appears, so
+    one legend click toggles that relay on every row.
+    """
     by_relay = {}
     for r in rows:
         by_relay.setdefault(r.get("relay_number"), []).append(r)
-    fig = go.Figure()
     for i, (relay, rrows) in enumerate(
         sorted(by_relay.items(), key=lambda kv: (kv[0] is None, kv[0]))
     ):
+        showlegend = legend_seen is None or relay not in legend_seen
+        if legend_seen is not None:
+            legend_seen.add(relay)
         fig.add_trace(
             go.Scatter(
-                x=[r.get("reading_ts", "") for r in rrows],
+                x=[_chart_ts(r.get("reading_ts", ""), zone) for r in rrows],
                 y=[r.get("relay_state") for r in rrows],
                 name=f"Relay {relay}",
                 mode="lines",
@@ -777,14 +960,58 @@ def _build_relay_chart(rows, colors):
                     color=_relay_colour(relay if relay is not None else i + 1, colors),
                     shape="hv",
                 ),
-            )
+                legendgroup=f"relay{relay}",
+                showlegend=showlegend,
+            ),
+            row=row,
+            col=None if row is None else 1,
         )
+
+
+def _build_relay_chart(rows, colors, zone=None):
+    """Stepped 0/1 chart of one Hyphae, one trace per relay_number."""
+    if not rows:
+        return _empty_figure("No data for selected filters", colors)
+    fig = go.Figure()
+    _add_relay_traces(fig, rows, colors, zone)
     fig.update_layout(
         **chart_layout(colors),
         margin=dict(l=60, r=20, t=30, b=40),
         legend=dict(orientation="h", y=1.12),
         xaxis=dict(title="Time"),
         yaxis=dict(title="Relay State", tickvals=[0, 1], range=[-0.1, 1.1]),
+    )
+    return fig
+
+
+def _build_relay_comparison_chart(series, colors, zone=None):
+    """Relay charts of several Hyphae stacked, one subplot row per device.
+
+    series: [(target, rows)]. Rows share the time axis and each is titled
+    with its device; legend entries name relay numbers and toggle them on
+    every row.
+    """
+    if not any(rows for _t, rows in series):
+        return _empty_figure("No data for selected filters", colors)
+    fig = make_subplots(
+        rows=len(series), cols=1, shared_xaxes=True, vertical_spacing=0.06
+    )
+    legend_seen = set()
+    for row, (target, rows) in enumerate(series, start=1):
+        _add_relay_traces(fig, rows, colors, zone, row=row, legend_seen=legend_seen)
+        fig.update_yaxes(
+            title_text=target["name"],
+            tickvals=[0, 1],
+            range=[-0.1, 1.1],
+            row=row,
+            col=1,
+        )
+    fig.update_xaxes(title_text="Time", row=len(series), col=1)
+    fig.update_layout(
+        **chart_layout(colors),
+        margin=dict(l=70, r=20, t=40, b=40),
+        height=COMPARE_BASE_PX + COMPARE_ROW_PX * len(series),
+        legend=dict(orientation="h", x=0, xanchor="left", y=1.0, yanchor="bottom"),
     )
     return fig
 

@@ -54,7 +54,7 @@ Mycelium/
 │   │   ├── devices_sentinel.py # Sentinel tab/detail panels (imported lazily by devices.py)
 │   │   ├── farm_overview.py    # Farm/room CRUD
 │   │   ├── alerts.py           # Alert rules + history
-│   │   ├── analytics.py        # Reports (period summary by Room/Spore/Sentinel), Explore (ad-hoc charts, relay shading for linked Spores), Data (raw rows); queries + chart builds run via run.io_bound
+│   │   ├── analytics.py        # Reports (period summary by Room/Spore/Sentinel), Explore (ad-hoc charts, one device or all devices per source, relay shading for linked Spores, Pressure spans Hyphae/Sentinel/OWM), Data (raw rows); queries + chart builds run via run.io_bound
 │   │   ├── analytics_reports.py # Reports tab: worker fetch + cards incl. control response / room comparison / sensor agreement (imported lazily by analytics.py)
 │   │   ├── business.py         # Business operations
 │   │   ├── fleet_management.py # Firmware upload + batch OTA

@@ -206,11 +206,11 @@ Stores relay state changes from Hyphae devices.
 - `idx_readings_hyphae_device_time`: Composite index for device+time queries
 
 #### readings_weather
-Stores external weather data.
+Stores external weather data. Rows are keyed by the OWM location, not a device: `device_id` holds the `user_settings.user_id` whose OpenWeatherMap feed was polled (see `weather_service.store_weather_data`). The `FOREIGN KEY ... REFERENCES device_spore` in the SQL is historical and not what the writer stores.
 
 | Column | Type | Description | Constraints |
 |--------|------|-------------|------------|
-| device_id | INTEGER | Reference to device | PK, FK |
+| device_id | INTEGER | user_id of the OWM location (not a device) | PK |
 | reading_ts | TEXT | Reading timestamp | PK |
 | current_temp | REAL | Current temperature | - |
 | feels_like | REAL | "Feels like" temperature | - |

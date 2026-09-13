@@ -135,6 +135,28 @@ def get_latest_weather(device_id: int) -> Optional[Dict[str, Any]]:
     return results[0] if results else None
 
 
+def get_locations() -> List[Dict[str, Any]]:
+    """
+    Distinct OWM locations that have stored weather, by device_id.
+
+    readings_weather.device_id is not a device: the weather poller stores
+    each user's OpenWeatherMap feed under that user's user_id (see
+    weather_service.store_weather_data). The LEFT JOIN picks up the user's
+    zip for labelling and keeps a location whose user row is gone, so its
+    history stays visible. Served by idx_readings_weather_device_time.
+
+    Returns:
+        List[Dict[str, Any]]: [{device_id, owm_zip_code}] ordered by device_id
+    """
+    query = """
+    SELECT DISTINCT w.device_id, u.owm_zip_code
+    FROM readings_weather w
+    LEFT JOIN user_settings u ON u.user_id = w.device_id
+    ORDER BY w.device_id
+    """
+    return execute_query(query, ())
+
+
 def update_reading(
     device_id: int,
     reading_ts: str,
