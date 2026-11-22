@@ -182,7 +182,7 @@ def update_dynamic_setting(
     UPDATE dynamic_settings
     SET {", ".join(update_fields)}
     WHERE device_id = ? AND group_num = ? AND parameter = ?
-    """
+    """  # SET clause built from fixed column literals; values are bound with ?  # nosec B608
 
     return execute_update(query, tuple(params))
 

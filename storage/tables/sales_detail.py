@@ -161,7 +161,7 @@ def update_sales_detail(
     UPDATE sales_detail
     SET {", ".join(update_fields)}
     WHERE detail_id = ?
-    """
+    """  # SET clause built from fixed column literals; values are bound with ?  # nosec B608
 
     return execute_update(query, tuple(params))
 

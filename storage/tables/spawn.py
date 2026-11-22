@@ -241,7 +241,7 @@ def update_spawn(
     UPDATE spawn
     SET {", ".join(update_fields)}
     WHERE spawn_id = ?
-    """
+    """  # SET clause built from fixed column literals; values are bound with ?  # nosec B608
 
     return execute_update(query, tuple(params))
 

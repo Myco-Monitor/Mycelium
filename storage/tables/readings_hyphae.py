@@ -357,7 +357,7 @@ def update_reading(
     UPDATE readings_hyphae
     SET {", ".join(update_fields)}
     WHERE device_id = ? AND reading_ts = ? AND relay_number = ?
-    """
+    """  # SET clause built from fixed column literals; values are bound with ?  # nosec B608
 
     return execute_update(query, tuple(params))
 

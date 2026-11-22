@@ -1,5 +1,7 @@
 # Mycelium
 
+[![CI](https://github.com/Myco-Monitor/Mycelium/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/Myco-Monitor/Mycelium/actions/workflows/ci.yml)
+
 **Mycelium** is the central monitoring, control, and data platform for the **Myco-Monitor** ecosystem — a modular system for precision environmental monitoring in mushroom cultivation.
 
 Mycelium runs locally on a desktop, laptop, or Raspberry Pi. It discovers and polls network-connected **Spore** (sensor), **Hyphae** (controller) and **Sentinel** (grower-air quality) devices over HTTPS, stores every reading in SQLite, and serves a reactive web dashboard built on NiceGUI. All data stays on your network — there is no cloud dependency.

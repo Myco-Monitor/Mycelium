@@ -244,7 +244,7 @@ def update_labour(
     UPDATE labour
     SET {", ".join(update_fields)}
     WHERE labour_id = ?
-    """
+    """  # SET clause built from fixed column literals; values are bound with ?  # nosec B608
 
     return execute_update(query, tuple(params))
 

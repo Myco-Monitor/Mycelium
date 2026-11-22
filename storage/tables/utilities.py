@@ -149,7 +149,7 @@ def get_utilities_by_date_range(
         "paid": "util_paid",
     }.get(date_type, "util_dued")
 
-    query = f"SELECT * FROM utilities WHERE {date_column} BETWEEN ? AND ? ORDER BY {date_column} DESC"
+    query = f"SELECT * FROM utilities WHERE {date_column} BETWEEN ? AND ? ORDER BY {date_column} DESC"  # column comes from a fixed dict; values are bound with ?  # nosec B608
     return execute_query(query, (start_date, end_date))
 
 
@@ -205,7 +205,7 @@ def get_utilities_by_farm_and_date_range(
     SELECT * FROM utilities 
     WHERE farm_id = ? AND {date_column} BETWEEN ? AND ? 
     ORDER BY {date_column} DESC
-    """
+    """  # column comes from a fixed dict; values are bound with ?  # nosec B608
     return execute_query(query, (farm_id, start_date, end_date))
 
 
@@ -341,7 +341,7 @@ def update_utility(
     # Add the unit_id for the WHERE clause
     params.append(unit_id)
 
-    query = f"UPDATE utilities SET {', '.join(update_fields)} WHERE unit_id = ?"
+    query = f"UPDATE utilities SET {', '.join(update_fields)} WHERE unit_id = ?"  # SET clause built from fixed column literals; values are bound with ?  # nosec B608
     return execute_update(query, tuple(params))
 
 

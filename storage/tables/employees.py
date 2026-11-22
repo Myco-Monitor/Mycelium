@@ -238,7 +238,7 @@ def update_employee(
     UPDATE employees
     SET {", ".join(update_fields)}
     WHERE emp_id = ? AND active = 1
-    """
+    """  # SET clause built from fixed column literals; values are bound with ?  # nosec B608
 
     return execute_update(query, tuple(params))
 

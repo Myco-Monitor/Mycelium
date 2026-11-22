@@ -154,7 +154,7 @@ def update_reading(
     UPDATE readings_pressure
     SET {", ".join(update_fields)}
     WHERE hyphae_id = ? AND reading_ts = ?
-    """
+    """  # SET clause built from fixed column literals; values are bound with ?  # nosec B608
 
     return execute_update(query, tuple(params))
 
