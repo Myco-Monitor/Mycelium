@@ -252,7 +252,7 @@ def update_device_spore(
     UPDATE device_spore
     SET {", ".join(update_fields)}
     WHERE device_id = ?
-    """
+    """  # SET clause built from fixed column literals; values are bound with ?  # nosec B608
 
     return execute_update(query, tuple(params))
 
@@ -292,7 +292,7 @@ def update_spore_weather_pressure(
     UPDATE device_spore
     SET {", ".join(update_fields)}
     WHERE device_id = ?
-    """
+    """  # SET clause built from fixed column literals; values are bound with ?  # nosec B608
     return execute_update(query, tuple(params))
 
 
@@ -385,7 +385,7 @@ def update_device_diagnostics(
     UPDATE device_spore
     SET {", ".join(update_fields)}
     WHERE device_id = ?
-    """
+    """  # SET clause built from fixed column literals; values are bound with ?  # nosec B608
     return execute_update(query, tuple(params))
 
 

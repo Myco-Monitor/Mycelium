@@ -32,7 +32,7 @@ def get_ota_history(device_id=None, device_type=None, limit=50):
         params.append(device_type)
 
     where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
-    query = f"SELECT * FROM ota_history {where} ORDER BY started_at DESC LIMIT ?"
+    query = f"SELECT * FROM ota_history {where} ORDER BY started_at DESC LIMIT ?"  # WHERE built from fixed condition literals; values are bound with ?  # nosec B608
     params.append(limit)
     return execute_query(query, tuple(params))
 

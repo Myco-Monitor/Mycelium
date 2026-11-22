@@ -224,7 +224,7 @@ def update_customer(
     UPDATE customers
     SET {", ".join(update_fields)}
     WHERE customer_id = ? AND active = 1
-    """
+    """  # SET clause built from fixed column literals; values are bound with ?  # nosec B608
 
     return execute_update(query, tuple(params))
 

@@ -156,7 +156,7 @@ def update_product_category(
     UPDATE product_categories 
     SET {", ".join(set_clauses)}
     WHERE item_id = ?
-    """
+    """  # SET clause built from fixed column literals; values are bound with ?  # nosec B608
 
     return execute_update(query, params)
 

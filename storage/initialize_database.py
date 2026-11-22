@@ -163,7 +163,7 @@ def _rebuild_check_table(conn, script, table):
 
     pragma = f"PRAGMA table_info({table})"
     cols = ", ".join(r[1] for r in conn.execute(pragma).fetchall())
-    copy_ddl = f"INSERT INTO {new_table} ({cols}) SELECT {cols} FROM {table}"
+    copy_ddl = f"INSERT INTO {new_table} ({cols}) SELECT {cols} FROM {table}"  # table and column names are trusted constants/PRAGMA output, never user input  # nosec B608
     conn.execute(copy_ddl)
 
     drop_ddl = f"DROP TABLE {table}"

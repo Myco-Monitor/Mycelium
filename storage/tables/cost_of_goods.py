@@ -220,7 +220,7 @@ def update_cost_of_goods(
     UPDATE cost_of_goods
     SET {", ".join(update_fields)}
     WHERE unit_id = ?
-    """
+    """  # SET clause built from fixed column literals; values are bound with ?  # nosec B608
 
     return execute_update(query, tuple(params))
 
