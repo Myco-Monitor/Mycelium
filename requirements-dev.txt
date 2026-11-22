@@ -1,0 +1,4 @@
+# CI / pre-push tooling (not needed to run Mycelium)
+ruff==0.15.18
+bandit==1.9.4
+pip-audit==2.10.1
